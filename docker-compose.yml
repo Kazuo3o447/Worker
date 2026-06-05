@@ -20,8 +20,8 @@ services:
   # -------------------------------------------------------------------------
   dashboard:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     env_file: .env
     ports:
       - "8501:8501"

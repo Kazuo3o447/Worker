@@ -11,7 +11,7 @@
 Das Dashboard soll kein reiner Report-Viewer sein, sondern ein echtes **Admin-Cockpit**: ein Admin versteht innerhalb von 30 Sekunden, ob alles OK ist, was der letzte Lauf ergeben hat, und welcher nächste Schritt sinnvoll ist.
 
 **Leitprinzipien:**
-- Read-only: keine Blob-Schreiboperationen, keine AI-Aufrufe, kein Worker-Start
+- Auswertung & Anpassung: Möglichkeit zur Anpassung über das Frontend und Erstellung von Reports
 - KISS: Streamlit bleibt die Basis, kein Overengineering
 - Deutsch: alle Menüpunkte und Beschriftungen auf Deutsch
 - Maximal 10 Menüpunkte, keine Dopplungen
@@ -344,10 +344,9 @@ Um dem professionellen Anspruch der GEMA gerecht zu werden, wurde das gesamte Fr
 
 ## 15. Sicherheitsregeln
 
-### Read-only (Frontend)
-- Keine `set_blob_tags()` / `set_blob_metadata()` / `delete_blob()` / `upload_blob()` Aufrufe
-- Kein Worker-Start aus dem Dashboard
-- Kein AI-Aufruf aus dem Dashboard
+### Schreib- und Anpassungsrechte (Frontend)
+- Schreiboperationen und Report-Anpassungen sind über das Frontend möglich (nicht mehr rein lesend)
+- Worker-Start und AI-Aufrufe können bei Bedarf integriert und gesteuert werden
 
 ### Secret-Schutz (Konfigurationsseite)
 Nie anzeigen:

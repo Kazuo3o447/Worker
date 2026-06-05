@@ -13,8 +13,8 @@
 │  └──────────────┘             │  ├── reports (output)         │    │
 │                               │  │   pilot-v0.1/<run_id>/    │    │
 │  ┌──────────────┐             │  └── quarantine-test          │    │
-│  │  Dashboard   │──liest─────▶└──────────────────────────────┘    │
-│  │  (read-only) │                                                  │
+│  │  Dashboard   │──liest/     │                                   │
+│  │ (read/write) │  schreibt──▶└──────────────────────────────┘    │
 │  │  Port 8501   │                                                  │
 │  └──────────────┘                                                  │
 └────────────────────────────────────────────────────────────────────┘
@@ -45,20 +45,15 @@
 - **Framework**: Streamlit
 - **Port**: 8501
 - **Dauerläufer**: ja (`docker compose up dashboard`)
-- **Aufgaben (nur lesen)**:
+- **Aufgaben**:
   - Reports aus `reports`-Container in Azure laden
   - Runs, Kennzahlen, Klassenverteilung, Fehler, Logs anzeigen
   - KI-Readiness-Analyse
-  - Keine Schreiboperationen, kein Blob-Tagging
+  - Report-Anpassungen vornehmen und neue Auswertungen erstellen
 
-### Trennungsprinzip
+### Trennungsprinzip (angepasst)
 
-Der Worker ist die **einzige Komponente**, die:
-- Blob Index Tags schreibt
-- Blob Metadata schreibt
-- klassifiziert
-
-Das Dashboard ist **rein lesend** und hat keinen Azure-Schreibzugriff.
+Der Worker klassifiziert standardmäßig im Batch. Das Dashboard ermöglicht es, Anpassungen an den Klassifizierungen/Reports vorzunehmen und direkt zurückzuschreiben. Der reine "Read-only"-Status des Dashboards ist aufgehoben.
 
 ## Datenfluss
 
