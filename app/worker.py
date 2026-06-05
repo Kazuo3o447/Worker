@@ -105,6 +105,7 @@ def run_scan(
 
     summary = RunSummary(
         run_id=run_id, mode="scan", status="ok" if errors == 0 else "error",
+        worker_name=config.worker_name,
         worker_version=config.worker_version,
         storage_account=config.storage_account,
         source_container=config.source_container,
@@ -129,9 +130,13 @@ def run_scan(
     if event_bytes:
         reports["run-events.jsonl"] = event_bytes
 
-    count = repo.upload_run_reports(run_id, reports)
-    summary.reports_uploaded = count > 0
-    L.log_reports_uploaded(run_id, config.report_container, f"{config.worker_version}/{run_id}", count)
+    if config.upload_reports:
+        count = repo.upload_run_reports(run_id, reports)
+        summary.reports_uploaded = count > 0
+        L.log_reports_uploaded(run_id, config.report_container, f"{config.worker_version}/{run_id}", count)
+    else:
+        summary.reports_uploaded = False
+        L.log_reports_uploaded(run_id, config.report_container, "(skipped: UPLOAD_REPORTS=false)", 0)
     L.log_run_finished(run_id, summary.to_dict())
     return 0 if errors == 0 else 1
 
@@ -264,6 +269,7 @@ def run_classify(
 
     summary = RunSummary(
         run_id=run_id, mode="classify", status="ok" if files_error == 0 else "partial",
+        worker_name=config.worker_name,
         worker_version=config.worker_version,
         storage_account=config.storage_account,
         source_container=config.source_container,
@@ -294,9 +300,13 @@ def run_classify(
     if event_bytes:
         reports["run-events.jsonl"] = event_bytes
 
-    count = repo.upload_run_reports(run_id, reports)
-    summary.reports_uploaded = count > 0
-    L.log_reports_uploaded(run_id, config.report_container, f"{config.worker_version}/{run_id}", count)
+    if config.upload_reports:
+        count = repo.upload_run_reports(run_id, reports)
+        summary.reports_uploaded = count > 0
+        L.log_reports_uploaded(run_id, config.report_container, f"{config.worker_version}/{run_id}", count)
+    else:
+        summary.reports_uploaded = False
+        L.log_reports_uploaded(run_id, config.report_container, "(skipped: UPLOAD_REPORTS=false)", 0)
     L.log_run_finished(run_id, summary.to_dict())
     return 0 if files_error == 0 else 1
 
@@ -382,12 +392,22 @@ def _classify_blob(
     end = dt.now(tz.utc)
     duration_ms = int((end - start).total_seconds() * 1000)
 
+    # Compute needs_ai flag
+    conf_int = int(confidence) if str(confidence).isdigit() else 0
+    _ai_min = config.ai_min_confidence_threshold if config else 60
+    needs_ai_val = (
+        class_label == "unknown"
+        or conf_int < _ai_min
+        or rule_result.reason_code == "no_rule_match"
+    ) and llm_used == "false"
+
     new_tags = {
         "class": class_label,
         "dsgvo": dsgvo,
         "archive_candidate": archive_candidate,
         "confidence": confidence,
         "status": "classified",
+        "needs_ai": "true" if needs_ai_val else "false",
     }
     clean_tags, _tag_errors = validate_tags(new_tags)
 
@@ -430,6 +450,7 @@ def _classify_blob(
         ai_input_chars=ai_input_chars,
         ai_skipped_reason=ai_skipped_reason,
         rule_class_before_ai=rule_class_before_ai,
+        needs_ai=needs_ai_val,
         reason_code=rule_result.reason_code,
         error_reason=error_reason,
         metadata_written="false",
@@ -454,6 +475,7 @@ def _write_to_azure(
         "readable": result.readable,
         "llm_used": result.llm_used,
         "status": result.status,
+        "needs_ai": "true" if result.needs_ai else "false",
     }
     ok_tags, err_tags = repo.set_blob_tags(blob_name, tags)
     if not ok_tags:

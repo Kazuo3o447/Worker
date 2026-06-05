@@ -75,6 +75,7 @@ class ClassificationResult:
     ai_input_chars: int = 0
     ai_skipped_reason: str = ""
     rule_class_before_ai: str = ""  # rule class label before any AI override
+    needs_ai: bool = False  # true when class=unknown, low confidence, or no_rule_match
 
 
 @dataclass
@@ -85,6 +86,7 @@ class RunSummary:
     mode: str
     status: str               # ok | partial | error
     # Configuration snapshot
+    worker_name: str = "Andre3000"
     worker_version: str = ""
     storage_account: str = ""
     source_container: str = ""
@@ -130,6 +132,7 @@ class RunSummary:
             "run_id": self.run_id,
             "mode": self.mode,
             "status": self.status,
+            "worker_name": self.worker_name,
             "worker_version": self.worker_version,
             "storage_account": self.storage_account,
             "source_container": self.source_container,

@@ -1,8 +1,9 @@
 # Projektstatus – GEMA Storage Classification Pilot
 
 > **Stand:** 2026-06-05  
-> **Phase:** 4 – Azure-first, produktionsnaher Pilot  
-> **Session-Ergebnis:** 15 Bugs behoben · Alle Tests grün · Scan + Dry-Run erfolgreich · Dashboard live ✅
+> **Worker-Name:** Andre3000  
+> **Phase:** 5 – Admin-Cockpit, Dateityp-Router, Admin-Reports  
+> **Session-Ergebnis:** Admin-Cockpit (10 Seiten), Dateityp-Router, Admin-Report JSON/PDF erweitert · 253 Tests grün ✅
 
 ---
 
@@ -79,8 +80,9 @@ Der GEMA Storage Classification Pilot ist ein **Azure-first Batch-Klassifizierun
 | `ai_policy.py` | Konservative Policy: blockiert AI wenn Regel ausreicht; Budget-Check; Extension-Blocklist | ✅ |
 | `ai_foundry_client.py` | Azure AI Foundry Client (derzeit deaktiviert) | ✅ |
 | `models.py` | `BlobRecord`, `RuleResult`, `ClassificationResult` (30 Felder), `RunSummary` (33 Felder) | ✅ |
-| `reports.py` | Baut 8 Report-Dateien als `bytes`; Upload nach Azure | ✅ |
-| `validation.py` | Validiert 7 Tags + Metadaten vor jedem Azure-Schreibzugriff | ✅ |
+| `app/reports.py` | Baut 10 Report-Dateien als `bytes`; admin-report.json (risk_assessment, file_type_distribution, worker_version) + admin-report.pdf | ✅ |
+| `app/file_type_router.py` | Dateityp-Router: route_strategy (text/legacy_office/ocr/vision/archive/binary); ai_allowed; extraction_required | ✅ |
+| `app/validation.py` | Validiert 8 Tags (inkl. `needs_ai`) + Metadaten vor jedem Azure-Schreibzugriff | ✅ |
 | `logging_utils.py` | Strukturiertes JSON-Logging; Events nach Azure | ✅ |
 | `azure_blob_repository.py` | Blob-Listing, Tag-Schreiben, Metadata-Schreiben, Report-Upload | ✅ |
 | `azure_storage.py` | Azure SDK Client-Factory | ✅ |
@@ -89,9 +91,9 @@ Der GEMA Storage Classification Pilot ist ein **Azure-first Batch-Klassifizierun
 
 | Datei | Funktion | Status |
 |---|---|---|
-| `app.py` | Streamlit-Hauptdatei; 10 Seiten; Background-Auth-Thread; Device-Code in UI | ✅ |
-| `config.py` | Frontend-Config; `worker_version=pilot-v0.1` | ✅ |
-| `azure_report_repository.py` | Read-only Azure Client; `list_run_ids()`, `get_run_summary()`, `get_csv()`, `get_events()` | ✅ |
+| `app.py` | Streamlit Admin-Cockpit; **10 Seiten** (Cockpit, Runs, Run Detail, Klassifizierung, KI Readiness, Dateien & Dateitypen, Fehler & Risiken, Reports & Exporte, Konfiguration, Run Commands); Health-Ampel; Background-Auth-Thread | ✅ |
+| `config.py` | Frontend-Config inkl. `worker_name`, `source_container`, `default_prefix` | ✅ |
+| `azure_report_repository.py` | Read-only Azure Client; `list_runs`, `get_report_json`, `get_report_csv`, `report_exists`, `list_report_files`, `get_report_bytes` | ✅ |
 | `components.py` | Wiederverwendbare UI-Komponenten | ✅ |
 
 ### Tests (`tests/`)
@@ -103,8 +105,9 @@ Der GEMA Storage Classification Pilot ist ein **Azure-first Batch-Klassifizierun
 | `test_reports.py` | Report-Generierung, CSV-Struktur, JSON-Inhalt | ✅ |
 | `test_validation.py` | Tag-Validierung, Metadaten-Validierung | ✅ |
 | `test_untagged_detection.py` | Ungetaggte-Datei-Erkennung | ✅ |
+| `test_file_type_router.py` | Dateityp-Router: route_strategy, ai_allowed, extraction_required, 60 Fälle | ✅ |
 
-**Gesamt: 165 Tests – alle grün ✅**
+**Gesamt: 253 Tests – alle grün ✅**
 
 ---
 
@@ -124,7 +127,7 @@ Pfad-basiert, kein Content-Download – erste Übereinstimmung gewinnt:
 
 ---
 
-## 6. Blob Index Tags (7 Tags pro Blob)
+## 6. Blob Index Tags (8 Tags pro Blob)
 
 | Tag-Key | Wertebereich |
 |---|---|
@@ -135,6 +138,9 @@ Pfad-basiert, kein Content-Download – erste Übereinstimmung gewinnt:
 | `confidence` | `0`..`100` |
 | `readable` | `true` \| `false` |
 | `llm_used` | `true` \| `false` |
+| `needs_ai` | `true` \| `false` – gesetzt wenn `class=unknown`, `confidence < threshold`, oder `reason_code=no_rule_match` |
+
+Azure Blob Index Tag Limit: 10. Aktuell: 8 Tags.
 
 ---
 
@@ -144,14 +150,16 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 
 | Datei | Inhalt |
 |---|---|
-| `run-summary.json` | 33 Felder: `run_id`, `mode`, `worker_version`, `started_at`, `finished_at`, `duration_seconds`, `files_seen`, `files_processed`, `files_classified`, `files_unknown`, `files_error`, `dry_run`, `reports_uploaded`, u. a. |
-| `details.csv` | Pro-Blob-Ergebnis mit 27 Spalten |
-| `errors.csv` | Blobs mit `action=error` |
-| `untagged.csv` | Blobs ohne `status`-Tag |
-| `samples.csv` | Stichproben je Klasse (max. 20 pro Gruppe) |
-| `ai-candidates.csv` | Blobs die AI-Kandidaten sind (auch wenn AI deaktiviert) |
-| `events.jsonl` | Structured JSON Log aller Worker-Ereignisse |
-| `summary-kv.csv` | Key-Value-Fassung der RunSummary |
+| `run-summary.json` | Kennzahlen inkl. `worker_name`, `dry_run`, `reports_uploaded` |
+| `classification-details.csv` | Pro-Blob-Ergebnis inkl. `needs_ai`-Spalte |
+| `classification-errors.csv` | Blobs mit `action=error` |
+| `untagged-files.csv` | Blobs ohne `status`-Tag |
+| `classification-samples.csv` | Stichproben je Klasse (max. 20 pro Gruppe) |
+| `ai-candidates.csv` | KI-Kandidaten (auch wenn KI deaktiviert) |
+| `run-events.jsonl` | Structured JSON Log aller Worker-Ereignisse |
+| `classification-summary.csv` | Key-Value-Metriken des Laufs |
+| `admin-report.json` | Konsolidierter Admin-Report (alle Kennzahlen, KI-Readiness, next actions) |
+| `admin-report.pdf` | Lesbarer Admin-Report für Menschen (ReportLab) |
 
 ---
 
@@ -204,7 +212,11 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 | Import-Kompatibilität (lokal + Docker) | ✅ `try/except ModuleNotFoundError` in `app.py` und `azure_report_repository.py` |
 | UI zeigt Device-Code-Login | ✅ Link + Code in Streamlit-Info-Box |
 | Auto-Reload nach Login | ✅ `st.rerun()` jede Sekunde bis Auth fertig |
-| 10 Dashboard-Seiten | ✅ Übersicht, Klassenverteilung, Details, KI-Analyse, Fehler, Ungetaggte, Stichproben, Logs, LLM Readiness, Run Commands |
+| Admin-Cockpit (10 Bereiche) | ✅ Cockpit, Runs, Run Detail, Klassifizierung, KI Readiness, Dateien & Dateitypen, Fehler & Risiken, Reports & Exporte, Konfiguration, Run Commands |
+| Health-Ampel | ✅ Grün/Gelb/Rot basierend auf errors/unknown/ai_candidates |
+| Empfohlene nächste Aktionen | ✅ Narrativ aus admin-report.json oder berechnet |
+| Run-Tabelle (alle Läufe) | ✅ Tabelle mit Filtern auf der Runs-Seite |
+| Download-Center | ✅ PDF, JSON, 6 CSVs, JSONL auf Reports & Exporte |
 
 ### Bekannter Login-Flow
 1. Dashboard starten: `docker compose up dashboard` (aus dem Projektverzeichnis)
@@ -242,13 +254,23 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 
 ## 12. Nächste Schritte
 
-### Bereit zur Ausführung (nach expliziter Freigabe)
+### Prio 1 – Content Extraction (direkt umsetzbar)
+```bash
+# Content Extraction Light: .doc-Inhalte extrahieren → danach KI möglich
+docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10 --dry-run
+```
+
+### Prio 2 – AI Dry Run
+```bash
+# KI Dry Run mit 5 Dateien – kein Azure-Write, KI-Aufrufe gegen Foundry
+docker compose run --rm worker --mode classify --dry-run \
+  --enable-ai --ai-provider foundry --ai-max-calls 5 --max-files 5
+```
+
+### Prio 3 – Echter Mini-Run
 ```bash
 # Echter Mini-Run – schreibt Tags an 10 Blobs (reversibel mit --force)
-docker compose run --rm worker \
-  --mode classify \
-  --prefix "_root_part000/" \
-  --max-files 10
+docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10
 ```
 ⚠️ **Dieser Run schreibt** `class=unknown, confidence=30, status=classified` als Blob Index Tags.  
 Reversibel mit erneutem Run + `--force`.
@@ -256,10 +278,12 @@ Reversibel mit erneutem Run + `--force`.
 ### Mittelfristig
 | Aufgabe | Priorität |
 |---|---|
+| Content Extraction Light implementieren | Hoch |
 | AI-Integration testen (Azure AI Foundry, `--enable-ai`) | Hoch |
-| Content-basierte Klassifizierung für `.doc`-Dateien | Hoch |
+| `route_strategy` in classification-details.csv schreiben | Mittel |
 | Weitere Prefixes / Container scannen | Mittel |
 | Azure Container Apps Deployment (siehe `docs/azure-container-apps-plan.md`) | Mittel |
+| AdminLTE Prototyp evaluieren (nach KI-Integration) | Niedrig |
 | CI/CD Pipeline (GitHub Actions) | Niedrig |
 
 ---
@@ -308,15 +332,15 @@ storage-classification-pilot/
 │   ├── logging_utils.py          # Structured JSON Logging
 │   ├── azure_blob_repository.py  # Azure SDK Operationen
 │   └── azure_storage.py          # Client-Factory
-├── frontend/                     # Streamlit Dashboard
-│   ├── app.py                    # Hauptdatei, 10 Seiten
+├── frontend/                     # Streamlit Admin-Cockpit
+│   ├── app.py                    # Hauptdatei, 10 Bereiche (Cockpit…Run Commands)
 │   ├── config.py                 # Frontend-Config
-│   ├── azure_report_repository.py # Read-only Azure Client
+│   ├── azure_report_repository.py # Read-only Azure Client (6 Methoden)
 │   ├── components.py             # UI-Komponenten
 │   ├── Dockerfile
 │   └── requirements.txt
-├── tests/                        # 165 Tests
-├── docs/                         # 5 Architekturdokumente
+├── tests/                        # 253 Tests
+├── docs/                         # 7 Dokumente
 ├── Dockerfile                    # Worker Container
 ├── docker-compose.yml            # worker + dashboard Services
 ├── .env                          # Lokale Konfiguration (nicht in Git)

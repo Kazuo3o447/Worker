@@ -13,9 +13,17 @@ from dataclasses import dataclass, field
 class FrontendConfig:
     auth_mode: str           # device_code | default | connection_string
     storage_account: str
+    source_container: str
     report_container: str
+    quarantine_container: str
+    worker_name: str
     worker_version: str
-    connection_string: str   # optional – emergency access
+    default_prefix: str
+    default_max_files: int
+    enable_ai: bool
+    ai_provider: str
+    ai_max_calls_per_run: int
+    connection_string: str   # optional – emergency access; never shown in UI
 
     @property
     def account_url(self) -> str:
@@ -23,10 +31,21 @@ class FrontendConfig:
 
 
 def load_frontend_config() -> FrontendConfig:
+    def _bool(v: str, default: bool = False) -> bool:
+        return str(v).lower() not in ("false", "0", "no")
+
     return FrontendConfig(
         auth_mode=os.environ.get("AUTH_MODE", "default"),
         storage_account=os.environ.get("AZURE_STORAGE_ACCOUNT", "stgemaclasspilot001"),
+        source_container=os.environ.get("SOURCE_CONTAINER", "cool-stage-test"),
         report_container=os.environ.get("REPORT_CONTAINER", "reports"),
+        quarantine_container=os.environ.get("QUARANTINE_CONTAINER", "quarantine-test"),
+        worker_name=os.environ.get("WORKER_NAME", "Andre3000"),
         worker_version=os.environ.get("WORKER_VERSION", "pilot-v0.1"),
+        default_prefix=os.environ.get("DEFAULT_PREFIX", ""),
+        default_max_files=int(os.environ.get("DEFAULT_MAX_FILES", "50")),
+        enable_ai=_bool(os.environ.get("ENABLE_AI", "false")),
+        ai_provider=os.environ.get("AI_PROVIDER", "none"),
+        ai_max_calls_per_run=int(os.environ.get("AI_MAX_CALLS_PER_RUN", "20")),
         connection_string=os.environ.get("AZURE_STORAGE_CONNECTION_STRING", ""),
     )

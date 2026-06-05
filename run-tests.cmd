@@ -1,4 +1,5 @@
 @echo off
-REM Tests ausfuehren (innerhalb des Worker-Containers)
-docker compose build worker
-docker compose run --rm worker python -m pytest tests/ -v
+REM Tests lokal ausfuehren (aus dem Projektverzeichnis)
+cd /d "%~dp0"
+set PYTHONPATH=%~dp0
+python -m pytest tests/ -q

@@ -153,3 +153,48 @@ class AzureReportRepository:
             except Exception:  # noqa: BLE001
                 pass
         return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    def get_report_bytes(self, run_id: str, filename: str) -> Optional[bytes]:
+        """Generic download of any report file by run_id and filename."""
+        return self._download(run_id, filename)
+
+    # ------------------------------------------------------------------
+    # Extended API
+    # ------------------------------------------------------------------
+
+    def list_runs(self) -> list[str]:
+        """Alias for list_run_ids() – returns run IDs sorted newest first."""
+        return self.list_run_ids()
+
+    def get_report_json(self, run_id: str, filename: str) -> dict:
+        """Download and parse a JSON report file. Returns {} on error."""
+        import json
+        data = self._download(run_id, filename)
+        if data is None:
+            return {}
+        try:
+            return json.loads(data.decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def get_report_csv(self, run_id: str, filename: str) -> pd.DataFrame:
+        """Download and parse a CSV report file. Returns empty DataFrame on error."""
+        return self.get_csv(run_id, filename)
+
+    def report_exists(self, run_id: str, filename: str) -> bool:
+        """Return True if the report file exists in Azure."""
+        return self._download(run_id, filename) is not None
+
+    def list_report_files(self, run_id: str) -> list[str]:
+        """List all filenames in the given run's report folder."""
+        cc = self._client.get_container_client(self.config.report_container)
+        prefix = f"{self.config.worker_version}/{run_id}/"
+        files: list[str] = []
+        try:
+            for blob in cc.list_blobs(name_starts_with=prefix):
+                filename = blob.name[len(prefix):]
+                if filename:
+                    files.append(filename)
+        except Exception:  # noqa: BLE001
+            pass
+        return sorted(files)

@@ -46,6 +46,7 @@ _TAG_VALIDATORS: dict[str, Callable[[str], bool]] = {
     "readable": lambda v: v in ALLOWED_BOOL,
     "llm_used": lambda v: v in ALLOWED_BOOL,
     "confidence": validate_confidence,
+    "needs_ai": lambda v: v in ALLOWED_BOOL,
 }
 
 

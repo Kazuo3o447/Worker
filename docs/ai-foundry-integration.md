@@ -54,6 +54,9 @@ docker compose run --rm worker --mode classify --enable-ai --ai-provider foundry
 ```
 Blob
   ↓
+file_type_router.route_blob()          ← NEU: Dateityp-Router (app/file_type_router.py)
+  → FileTypeRoute (strategy, ai_allowed, extraction_required, …)
+  ↓ (nur wenn ai_allowed=True)
 classifier_rules.classify_blob()
   ↓
 ai_policy.should_call_ai()
@@ -95,6 +98,28 @@ Erlaubte Werte:
 - `dsgvo`, `archive_candidate`, `readable`: "true" oder "false"
 
 Bei ungültigen Werten wird der AI-Aufruf als Fehler gezählt und die Regel-Klassifikation beibehalten.
+
+---
+
+## Voraussetzung: Dateityp-Router
+
+Bevor die KI aufgerufen werden kann, muss der **Dateityp-Router** `ai_allowed=True` gesetzt haben.
+
+Folgende Dateitypen werden **niemals** an die KI übergeben, unabhängig von allen KI-Einstellungen:
+
+| Typ | Grund |
+|---|---|
+| `.exe`, `.dll`, `.msi` | Ausführbare Dateien |
+| `.zip`, `.7z`, `.rar` | Archive (im MVP nicht entpackt) |
+| `.mp3`, `.wav`, `.mp4` | Medien (im MVP keine Transkription) |
+| `.jpg`, `.png` (OCR/Vision aus) | Bilder ohne Extraktor |
+| `.xlsm`, `.docm` | Makro-Office |
+| Unbekannte Erweiterungen | Unsupported |
+
+Dateitypen mit `ai_allowed=True` (KI darf aufgerufen werden):
+`.txt`, `.csv`, `.json`, `.xml`, `.yaml`, `.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pdf`
+
+Vollständige Matrix: siehe [andre3000-dateityp-router.md](andre3000-dateityp-router.md)
 
 ---
 

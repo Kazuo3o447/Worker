@@ -233,7 +233,7 @@ class TestReportWriterBuildAll:
         writer = ReportWriter(_RUN_ID)
         summary = _make_summary()
         reports = writer.build_all_reports(summary, [], [])
-        assert len(reports) == 7
+        # 7 base files + admin-report.json + admin-report.pdf (if reportlab installed)
         assert "run-summary.json" in reports
         assert "classification-details.csv" in reports
         assert "classification-errors.csv" in reports
@@ -241,6 +241,7 @@ class TestReportWriterBuildAll:
         assert "classification-summary.csv" in reports
         assert "classification-samples.csv" in reports
         assert "ai-candidates.csv" in reports
+        assert "admin-report.json" in reports
 
     def test_all_values_are_bytes(self):
         writer = ReportWriter(_RUN_ID)
@@ -266,6 +267,7 @@ class TestReportWriterBuildAll:
         assert "ai_provider" in header
         assert "ai_reason" in header
         assert "ai_input_chars" in header
+        assert "needs_ai" in header
 
     def test_errors_csv_contains_error_rows_only(self):
         writer = ReportWriter(_RUN_ID)
@@ -314,7 +316,7 @@ class TestReportWriterBuildAll:
             summary = _make_summary()
             reports = writer.build_all_reports(summary, [], [])
             written = writer.write_local_reports(reports, tmpdir)
-            assert len(written) == 7
+            assert len(written) >= 7  # at least 7 base files
             for path in written:
                 assert os.path.isfile(path)
 
@@ -374,3 +376,177 @@ class TestRunSummaryToDict:
         assert d["enable_ai"] is False
         assert d["ai_provider"] == "none"
         assert d["ai_candidates"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Admin report tests
+# ---------------------------------------------------------------------------
+
+from app.reports import _build_admin_report_json, _build_admin_report_pdf  # noqa: E402
+
+
+class TestAdminReportJson:
+    def test_is_generated_and_bytes(self):
+        summary = _make_summary()
+        data = _build_admin_report_json(summary, [], [])
+        assert isinstance(data, bytes)
+
+    def test_is_valid_json(self):
+        summary = _make_summary()
+        data = _build_admin_report_json(summary, [], [])
+        parsed = json.loads(data.decode("utf-8"))
+        assert isinstance(parsed, dict)
+
+    def test_required_keys_present(self):
+        summary = _make_summary()
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        for key in ["report_type", "generated_at", "worker_name", "worker_version",
+                    "run", "azure", "safety", "metrics", "classification_distribution",
+                    "file_type_distribution", "ai_readiness", "errors_summary",
+                    "risk_assessment", "next_actions", "report_files"]:
+            assert key in parsed, f"Missing key: {key}"
+
+    def test_worker_version_in_report(self):
+        from app.models import RunSummary
+        summary = RunSummary(run_id=_RUN_ID, mode="classify", status="ok",
+                             worker_name="Andre3000", worker_version="pilot-v0.1")
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert parsed["worker_version"] == "pilot-v0.1"
+
+    def test_file_type_distribution_is_list(self):
+        summary = _make_summary()
+        results = [_make_result(blob_name="a.pdf"), _make_result(blob_name="b.docx")]
+        parsed = json.loads(_build_admin_report_json(summary, results, []).decode("utf-8"))
+        assert isinstance(parsed["file_type_distribution"], list)
+
+    def test_risk_assessment_is_list(self):
+        summary = _make_summary()
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert isinstance(parsed["risk_assessment"], list)
+
+    def test_risk_assessment_contains_error_risk(self):
+        summary = _make_summary(files_error=2)
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        risks = parsed["risk_assessment"]
+        risk_keys = [r.get("risk") for r in risks]
+        assert "errors_present" in risk_keys
+
+    def test_risk_assessment_ai_candidates_warning(self):
+        summary = _make_summary(ai_candidates=5)
+        # enable_ai defaults to False, so risk should be triggered
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        risks = parsed["risk_assessment"]
+        risk_keys = [r.get("risk") for r in risks]
+        assert "ai_candidates_but_ai_off" in risk_keys
+
+    def test_next_actions_is_list_and_not_empty(self):
+        summary = _make_summary()
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert isinstance(parsed["next_actions"], list)
+        assert len(parsed["next_actions"]) > 0
+
+    def test_next_actions_error_mention(self):
+        summary = _make_summary(files_error=3)
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        actions_str = " ".join(parsed["next_actions"])
+        assert "Fehler" in actions_str or "fehler" in actions_str.lower()
+
+    def test_metrics_ai_calls_skipped(self):
+        summary = _make_summary()
+        summary.ai_calls_skipped = 7
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert parsed["metrics"]["ai_calls_skipped"] == 7
+
+    def test_metrics_rules_only_count(self):
+        summary = _make_summary(files_processed=3)
+        results = [
+            _make_result(llm_used="false"),
+            _make_result(llm_used="false"),
+            _make_result(llm_used="true"),
+        ]
+        parsed = json.loads(_build_admin_report_json(summary, results, []).decode("utf-8"))
+        assert parsed["metrics"]["rules_only_count"] == 2
+        assert parsed["metrics"]["llm_used_count"] == 1
+
+    def test_no_samples_key(self):
+        """Old 'samples' key was removed from admin-report.json schema."""
+        summary = _make_summary()
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        # samples was removed in refactoring
+        assert "samples" not in parsed
+
+    def test_worker_name_in_report(self):
+        from app.models import RunSummary
+        summary = RunSummary(run_id=_RUN_ID, mode="classify", status="ok",
+                             worker_name="Andre3000")
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert parsed["worker_name"] == "Andre3000"
+
+    def test_run_id_in_report(self):
+        summary = _make_summary()
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert parsed["run"]["run_id"] == _RUN_ID
+
+    def test_metrics_all_values_are_bytes(self):
+        writer = ReportWriter(_RUN_ID)
+        summary = _make_summary()
+        reports = writer.build_all_reports(summary, [], [])
+        for fname, data in reports.items():
+            assert isinstance(data, bytes), f"{fname} is not bytes"
+
+
+class TestAdminReportPdf:
+    def test_is_generated_and_bytes(self):
+        pytest.importorskip("reportlab")
+        summary = _make_summary()
+        data = _build_admin_report_pdf(summary, [])
+        assert isinstance(data, bytes)
+
+    def test_starts_with_pdf_magic(self):
+        pytest.importorskip("reportlab")
+        summary = _make_summary()
+        data = _build_admin_report_pdf(summary, [])
+        assert data[:4] == b"%PDF"
+
+    def test_pdf_in_build_all_reports(self):
+        pytest.importorskip("reportlab")
+        writer = ReportWriter(_RUN_ID)
+        summary = _make_summary()
+        reports = writer.build_all_reports(summary, [], [])
+        assert "admin-report.pdf" in reports
+        assert reports["admin-report.pdf"][:4] == b"%PDF"
+
+
+# ---------------------------------------------------------------------------
+# needs_ai flag tests
+# ---------------------------------------------------------------------------
+
+class TestNeedsAiFlag:
+    def test_validation_accepts_needs_ai_true(self):
+        from app.validation import validate_tags
+        valid, errors = validate_tags({"needs_ai": "true"})
+        assert "needs_ai" in valid
+        assert not errors
+
+    def test_validation_accepts_needs_ai_false(self):
+        from app.validation import validate_tags
+        valid, errors = validate_tags({"needs_ai": "false"})
+        assert "needs_ai" in valid
+        assert not errors
+
+    def test_validation_rejects_needs_ai_invalid(self):
+        from app.validation import validate_tags
+        valid, errors = validate_tags({"needs_ai": "maybe"})
+        assert "needs_ai" not in valid
+        assert errors
+
+    def test_needs_ai_in_classification_result(self):
+        r = _make_result()
+        assert hasattr(r, "needs_ai")
+
+    def test_worker_name_in_run_summary(self):
+        from app.models import RunSummary
+        s = RunSummary(run_id="x", mode="scan", status="ok")
+        assert s.worker_name == "Andre3000"
+        d = s.to_dict()
+        assert d["worker_name"] == "Andre3000"

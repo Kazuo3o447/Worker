@@ -145,6 +145,43 @@ class TestValidateTagsInvalid:
 
 
 # ---------------------------------------------------------------------------
+# needs_ai tag validation
+# ---------------------------------------------------------------------------
+
+class TestNeedsAiTag:
+    def test_needs_ai_true_valid(self):
+        valid, errors = validate_tags({"needs_ai": "true"})
+        assert "needs_ai" in valid
+        assert not errors
+
+    def test_needs_ai_false_valid(self):
+        valid, errors = validate_tags({"needs_ai": "false"})
+        assert "needs_ai" in valid
+        assert not errors
+
+    def test_needs_ai_invalid_value(self):
+        valid, errors = validate_tags({"needs_ai": "yes"})
+        assert "needs_ai" not in valid
+        assert errors
+
+    def test_needs_ai_with_full_tag_set_within_limit(self):
+        # 8 tags total – still under Azure limit of 10
+        tags = {
+            "status": "classified",
+            "class": "finance",
+            "dsgvo": "false",
+            "archive_candidate": "true",
+            "confidence": "80",
+            "readable": "true",
+            "llm_used": "false",
+            "needs_ai": "false",
+        }
+        valid, errors = validate_tags(tags)
+        assert errors == []
+        assert "needs_ai" in valid
+
+
+# ---------------------------------------------------------------------------
 # validate_metadata – valid cases
 # ---------------------------------------------------------------------------
 

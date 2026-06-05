@@ -32,6 +32,7 @@
   - Blobs in `cool-stage-test` auflisten
   - Blob Index Tags lesen (aktuellen Status ermitteln)
   - Ungetaggte / retry-fähige Blobs erkennen
+  - **Dateityp-Router** ausführen (`app/file_type_router.py`): Extraktionsstrategie bestimmen, ai_allowed/ocr_required/vision_required setzen
   - Regelbasiert klassifizieren (Pfad + Extension, kein Dateiinhalt)
   - Optional: KI-Klassifizierung via Azure AI Foundry (`ENABLE_AI=true`)
   - Blob Index Tags schreiben (7 Tags: class, dsgvo, archive_candidate, confidence, readable, llm_used, status)
@@ -67,10 +68,12 @@ Das Dashboard ist **rein lesend** und hat keinen Azure-Schreibzugriff.
    └─▶ list_blobs(cool-stage-test) mit Tags
        └─▶ für jeden Blob: should_process_blob(existing_tags)
            ├─ skip → log_blob_skipped
-           └─ process → classify_blob(blob_name)  ← 1 Argument
-               └─▶ RuleResult (class, dsgvo, confidence, readable, llm_used)
-                   └─▶ ai_policy.should_call_ai()  ← optional
-                       └─▶ ai_foundry_client.classify()  ← wenn Kandidat + Budget
+           └─ process → file_type_router.route_blob()  ← Dateityp-Router
+               └─▶ FileTypeRoute (strategy, ai_allowed, extraction_required, …)
+                   └─▶ classify_blob(blob_name)  ← Regelbasiert
+                       └─▶ RuleResult (class, dsgvo, confidence, readable, llm_used)
+                           └─▶ ai_policy.should_call_ai()  ← optional (nur wenn ai_allowed=True)
+                               └─▶ ai_foundry_client.classify()  ← wenn Kandidat + Budget
                    ├─▶ set_blob_tags(7 Tags)        ← nicht in --dry-run
                    ├─▶ set_blob_metadata(8+ Felder) ← nicht in --dry-run
                    └─▶ ClassificationResult gespeichert
@@ -135,9 +138,10 @@ Das Dashboard ist **rein lesend** und hat keinen Azure-Schreibzugriff.
 
 | Stufe | Feature |
 |-------|---------|
-| v0 (jetzt) | Regelbasierte + optionale KI-Klassifikation, Reports nach Azure, Dashboard |
-| v1 | Office/PDF Textextraktion (ohne vollständigen Download) |
-| v2 | Erweiterte KI-Modelle, Batch-Calls, Konfidenz-Cache |
+| v0 (jetzt) | Regelbasierte + optionale KI-Klassifikation, Reports nach Azure, Dashboard, **Dateityp-Router** (`file_type_router.py`) |
+| v0.5 | Extraction-Router Light (Text aus .docx, .pdf, .txt), needs_ai-Tag, Content-basierte Klassifikation |
+| v1 | OCR (Azure Document Intelligence), Vision (GPT-4o), Legacy-Office (.doc via LibreOffice/Tika) |
+| v2 | Erweiterte KI-Modelle, Batch-Calls, Konfidenz-Cache, automatischer Trigger (Azure Function) |
 | v3 | Lifecycle-Regeln (automatisches Archivieren/Löschen) |
 | v4 | Review-Workflow (Fachbereich bestätigt Klassifikation) |
 | v5 | Automatischer Azure Container Apps Job (täglich) |

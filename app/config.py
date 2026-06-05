@@ -24,6 +24,7 @@ class Config:
     source_container: str
     report_container: str
     quarantine_container: str
+    worker_name: str
     worker_version: str
     default_max_files: int
     default_prefix: Optional[str]
@@ -60,6 +61,7 @@ def load_config() -> Config:
         source_container=os.getenv("SOURCE_CONTAINER", "cool-stage-test"),
         report_container=os.getenv("REPORT_CONTAINER", "reports"),
         quarantine_container=os.getenv("QUARANTINE_CONTAINER", "quarantine-test"),
+        worker_name=os.getenv("WORKER_NAME", "Andre3000"),
         worker_version=os.getenv("WORKER_VERSION", "pilot-v0.1"),
         default_max_files=int(os.getenv("DEFAULT_MAX_FILES", "50")),
         default_prefix=os.getenv("DEFAULT_PREFIX") or None,

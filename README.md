@@ -1,6 +1,10 @@
-# GEMA Storage Classification Pilot v0
+# GEMA Storage Classification Pilot – Worker: Andre3000
 
-Regelbasierter Python-Worker zur Klassifizierung von Blobs im Azure Blob Storage, plus Streamlit-Dashboard zur Analyse der Ergebnisse.
+Regelbasierter Python-Worker zur Klassifizierung von Blobs im Azure Blob Storage, plus Streamlit **Admin-Cockpit** zur Auswertung der Ergebnisse.
+
+**Worker-Name:** Andre3000  
+**Version:** pilot-v0.1  
+**Tests:** 253 ✅
 
 ---
 
@@ -9,7 +13,7 @@ Regelbasierter Python-Worker zur Klassifizierung von Blobs im Azure Blob Storage
 Pilot zur Klassifizierung von Fileserver-Altbeständen in Azure Blob Storage.  
 Der Worker liest Blobs aus `cool-stage-test`, klassifiziert regelbasiert anhand von Pfad und Dateiendung und schreibt Blob Index Tags sowie Metadata zurück.
 
-Das Dashboard zeigt Ergebnisse, Fehler, Logs und Kennzahlen an.  
+Das **Admin-Cockpit** (10 Bereiche: Cockpit, Runs, Run Detail, Klassifizierung, KI Readiness, Dateien & Dateitypen, Fehler & Risiken, Reports & Exporte, Konfiguration, Run Commands) zeigt Ergebnisse, Health-Status und Handlungsempfehlungen an.  
 Beides läuft Docker-first und kann später als Azure Container Apps Job bzw. Container App betrieben werden.
 
 ---
@@ -135,10 +139,10 @@ Oder:
 run-worker-classify.cmd
 ```
 
-Danach im Dashboard prüfen:
-- 🏠 Übersicht → Kennzahlen
-- 📊 Klassenverteilung
-- ❌ Fehler (idealerweise 0)
+Danach im Admin-Cockpit prüfen:
+- Cockpit → Health-Ampel, KPIs
+- Klassifizierung → Klassen-Verteilung
+- Fehler & Risiken → Fehlertabelle
 
 ---
 
@@ -146,8 +150,10 @@ Danach im Dashboard prüfen:
 
 | Mode | Beschreibung | Schreibt Blob Tags | Schreibt Metadata | Lädt Reports hoch |
 |------|-------------|-------------------|-------------------|--------------------|
-| `scan` | Listet Blobs, erkennt Ungetaggte, lädt Scan-Reports nach Azure | **Nein** | **Nein** | Ja |
-| `classify` | Klassifiziert bis zu `--max-files` Blobs, lädt Reports nach Azure | Ja (ohne `--dry-run`) | Ja (ohne `--dry-run`) | Ja |
+| `scan` | Listet Blobs, erkennt Ungetaggte, lädt Scan-Reports nach Azure | **Nein** | **Nein** | Ja (wenn `UPLOAD_REPORTS=true`) |
+| `classify` | Klassifiziert bis zu `--max-files` Blobs, lädt Reports nach Azure | Ja (ohne `--dry-run`) | Ja (ohne `--dry-run`) | Ja (wenn `UPLOAD_REPORTS=true`) |
+
+**Dry-Run:** `--dry-run` verhindert das Schreiben von Blob Tags und Metadata. Reports werden trotzdem nach Azure hochgeladen, sofern `UPLOAD_REPORTS=true`.
 
 ---
 
@@ -157,7 +163,7 @@ Danach im Dashboard prüfen:
 python -m app.main --mode {scan|classify}
   [--max-files N]    Standard: DEFAULT_MAX_FILES aus .env (50)
   [--force]          Auch bereits klassifizierte Blobs neu verarbeiten
-  [--dry-run]        Keine Writes nach Azure (Tags/Metadata/Reports werden NICHT geschrieben)
+  [--dry-run]        Tags/Metadata NICHT schreiben; Reports trotzdem hochladen
   [--prefix PATH]    Nur Blobs mit diesem Prefix verarbeiten
   [--enable-ai]      KI-Klassifizierung aktivieren (überschreibt ENABLE_AI=false)
   [--ai-provider]    KI-Provider: none | foundry
@@ -168,18 +174,20 @@ python -m app.main --mode {scan|classify}
 
 ## 11 · Reports
 
-Nach jedem Lauf werden Reports automatisch nach Azure hochgeladen:
+Nach jedem Lauf werden Reports automatisch nach Azure hochgeladen (wenn `UPLOAD_REPORTS=true`):
 
 **Azure** (Container `reports`, Pfad: `pilot-v0.1/<run_id>/`):
 ```
-run-summary.json             – Kennzahlen des Laufs
-classification-details.csv   – Eine Zeile pro verarbeiteter Datei
+run-summary.json             – Kennzahlen des Laufs (inkl. worker_name)
+classification-details.csv   – Eine Zeile pro verarbeiteter Datei (inkl. needs_ai)
 classification-summary.csv   – Aggregierte Key-Value-Metriken
 classification-errors.csv    – Nur Fehlerfälle
 untagged-files.csv           – Alle ungetaggten/retry-fähigen Dateien
 classification-samples.csv   – Stichproben je Klasse
 ai-candidates.csv            – KI-Kandidaten (auch wenn KI deaktiviert)
 run-events.jsonl             – Strukturierter Event-Log (JSON Lines)
+admin-report.json            – Konsolidierter Admin-Report inkl. risk_assessment, file_type_distribution
+admin-report.pdf             – Lesbarer Admin-Report für Menschen (ReportLab, best-effort)
 ```
 
 ---
@@ -227,9 +235,10 @@ Regeln werden in Prioritätsreihenfolge ausgewertet (erste Übereinstimmung gewi
 run-tests.cmd
 ```
 
-Oder lokal:
+Oder lokal (aus dem Projektverzeichnis):
 ```cmd
-python -m pytest tests/ -v
+set PYTHONPATH=.
+python -m pytest tests/ -q
 ```
 
 ---
