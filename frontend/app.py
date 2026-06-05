@@ -20,7 +20,7 @@ _DEVICE_CODE_MSG_FILE = pathlib.Path("/tmp/azure_device_code.txt")
 # Page config (must be first Streamlit call)
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="GEMA Classification Pilot",
+    page_title="Andree3000",
     page_icon="G",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -76,7 +76,7 @@ _ensure_auth_thread()
 _auth = _get_auth_state()
 
 if not _auth["event"].is_set():
-    st.title("GEMA Classification Pilot")
+    st.title("Andree3000")
     if _DEVICE_CODE_MSG_FILE.exists():
         st.info(_DEVICE_CODE_MSG_FILE.read_text(encoding="utf-8"))
     else:

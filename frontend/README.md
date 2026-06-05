@@ -1,4 +1,4 @@
-# GEMA Classification Pilot – Dashboard
+# Andree3000 – Dashboard
 
 Streamlit-Dashboard zur Analyse der Klassifizierungsergebnisse.
 
