@@ -12,13 +12,20 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
+import tempfile
 import threading
 import time
+
+# Ensure the parent directory (storage-classification-pilot) is in sys.path
+_frontend_dir = pathlib.Path(__file__).resolve().parent
+if str(_frontend_dir.parent) not in sys.path:
+    sys.path.insert(0, str(_frontend_dir.parent))
 
 import pandas as pd
 import streamlit as st
 
-_DEVICE_CODE_MSG_FILE = pathlib.Path("/tmp/azure_device_code.txt")
+_DEVICE_CODE_MSG_FILE = pathlib.Path(tempfile.gettempdir()) / "azure_device_code.txt"
 
 # ---------------------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -240,6 +247,100 @@ def _next_action(summary: dict, admin: dict) -> str:
     if ai_cand > 0:
         return f"KI-Kandidaten prüfen: {ai_cand} Dateien für KI-Klassifizierung bereit"
     return "Kein Handlungsbedarf – Lauf war erfolgreich."
+
+
+def compile_pdf_on_the_fly_frontend(run_id: str) -> bytes | None:
+    """Dynamically generate the beautifully formatted PDF report with landscape and pie charts from the current run data."""
+    summary_dict = _summary(run_id)
+    if not summary_dict:
+        return None
+    details_df = _csv(run_id, "classification-details.csv")
+    
+    try:
+        from app.models import RunSummary, ClassificationResult
+        from app.reports import _build_admin_report_pdf
+        
+        summary_obj = RunSummary(
+            run_id=summary_dict.get("run_id", run_id),
+            mode=summary_dict.get("mode", ""),
+            status=summary_dict.get("status", ""),
+            worker_name=summary_dict.get("worker_name", "Andre3000"),
+            worker_version=summary_dict.get("worker_version", ""),
+            storage_account=summary_dict.get("storage_account", ""),
+            source_container=summary_dict.get("source_container", ""),
+            report_container=summary_dict.get("report_container", ""),
+            prefix=summary_dict.get("prefix", ""),
+            dry_run=bool(summary_dict.get("dry_run", False)),
+            force=bool(summary_dict.get("force", False)),
+            max_files=int(summary_dict.get("max_files", 0)),
+            started_at=summary_dict.get("started_at", ""),
+            finished_at=summary_dict.get("finished_at", ""),
+            files_seen=int(summary_dict.get("files_seen", 0)),
+            files_untagged=int(summary_dict.get("files_untagged", 0)),
+            files_skipped=int(summary_dict.get("files_skipped", 0)),
+            files_processed=int(summary_dict.get("files_processed", 0)),
+            files_classified=int(summary_dict.get("files_classified", 0)),
+            files_unknown=int(summary_dict.get("files_unknown", 0)),
+            files_error=int(summary_dict.get("files_error", 0)),
+            bytes_seen=int(summary_dict.get("bytes_seen", 0)),
+            bytes_processed=int(summary_dict.get("bytes_processed", 0)),
+            duration_seconds=float(summary_dict.get("duration_seconds", 0.0)),
+            enable_ai=bool(summary_dict.get("enable_ai", False)),
+            ai_provider=summary_dict.get("ai_provider", "none"),
+            ai_max_calls_per_run=int(summary_dict.get("ai_max_calls_per_run", 0)),
+            ai_calls_used=int(summary_dict.get("ai_calls_used", 0)),
+            ai_calls_skipped=int(summary_dict.get("ai_calls_skipped", 0)),
+            ai_errors=int(summary_dict.get("ai_errors", 0)),
+            ai_candidates=int(summary_dict.get("ai_candidates", 0))
+        )
+        
+        results_list = []
+        if not details_df.empty:
+            for _, row in details_df.iterrows():
+                # Helper to safecast string values from dataframe
+                def _val_str(col: str, default: str = "") -> str:
+                    v = row.get(col)
+                    if pd.isna(v) or v is None:
+                        return default
+                    return str(v).strip()
+                
+                # Check confidence float conversion to clean numeric string (eg. 85.0 -> 85)
+                raw_conf = row.get("confidence")
+                conf_str = ""
+                if pd.notna(raw_conf) and raw_conf is not None:
+                    try:
+                        conf_str = str(int(float(raw_conf)))
+                    except Exception:
+                        conf_str = str(raw_conf).strip()
+                
+                results_list.append(ClassificationResult(
+                    run_id=_val_str("run_id", run_id),
+                    processed_at=_val_str("processed_at"),
+                    blob_name=_val_str("blob_name"),
+                    container=_val_str("container"),
+                    size_bytes=int(row.get("size_bytes", 0) if pd.notna(row.get("size_bytes")) else 0),
+                    extension=_val_str("extension"),
+                    last_modified=_val_str("last_modified"),
+                    etag=_val_str("etag"),
+                    existing_status_before=_val_str("existing_status_before"),
+                    action=_val_str("action"),
+                    status=_val_str("status"),
+                    class_label=_val_str("class", _val_str("class_label")),
+                    dsgvo=_val_str("dsgvo", "false").lower(),
+                    archive_candidate=_val_str("archive_candidate", "false").lower(),
+                    confidence=conf_str,
+                    readable=_val_str("readable", "true"),
+                    llm_used=_val_str("llm_used", "false"),
+                    reason_code=_val_str("reason_code"),
+                    error_reason=_val_str("error_reason"),
+                    metadata_written=_val_str("metadata_written", "false"),
+                    tags_written=_val_str("tags_written", "false"),
+                    duration_ms=int(row.get("duration_ms", 0) if pd.notna(row.get("duration_ms")) else 0),
+                    needs_ai=str(row.get("needs_ai", "false")).lower() == "true"
+                ))
+        return _build_admin_report_pdf(summary_obj, results_list)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +576,7 @@ def page_logs(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_ki_readiness(run_id: str) -> None:
-    st.header("🤖 KI Readiness")
+    st.header("KI Readiness")
     summary = _summary(run_id)
     ai_enabled = summary.get("enable_ai", False)
     ai_provider = summary.get("ai_provider", "none")
@@ -575,7 +676,7 @@ def page_ki_readiness(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_config(_run_id: str) -> None:
-    st.header("⚙️ Konfiguration")
+    st.header("Konfiguration")
     st.info("Diese Seite zeigt die aktuelle Worker-Konfiguration (read-only). Keine Secrets werden angezeigt.")
     cfg = repo.config
 
@@ -667,17 +768,17 @@ def page_run_commands(_run_id: str) -> None:
 
     if is_classify and not is_dry_run:
         st.error(
-            "⚠️ **Echter Classify-Lauf**: Tags und Metadata werden in Azure geschrieben. "
+            "**Echter Classify-Lauf**: Tags und Metadata werden in Azure geschrieben. "
             "Zuerst mit `classify dry-run` testen!"
         )
     if force:
         st.warning(
-            "⚠️ **--force aktiv**: Bereits klassifizierte Dateien werden erneut verarbeitet "
+            "**--force aktiv**: Bereits klassifizierte Dateien werden erneut verarbeitet "
             "und Tags überschrieben."
         )
     if enable_ai:
         st.warning(
-            "⚠️ **KI aktiviert**: KI-Aufrufe kosten Token. "
+            "**KI aktiviert**: KI-Aufrufe kosten Token. "
             "Zuerst mit Dry-Run testen. Keine KI-Aktivierung ohne explizite Freigabe."
         )
 
@@ -697,15 +798,17 @@ def page_run_commands(_run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_exports(run_id: str) -> None:
-    st.header("📤 Exporte")
+    st.header("Exporte")
     st.caption(f"Run: `{run_id}`")
 
     # admin-report.pdf
     st.subheader("Admin-Report PDF")
-    pdf_bytes = repo.get_report_bytes(run_id, "admin-report.pdf")
+    pdf_bytes = compile_pdf_on_the_fly_frontend(run_id)
+    if not pdf_bytes:
+        pdf_bytes = repo.get_report_bytes(run_id, "admin-report.pdf")
     if pdf_bytes:
         st.download_button(
-            "⬇ admin-report.pdf herunterladen",
+            "Admin-Report PDF herunterladen",
             data=pdf_bytes,
             file_name=f"admin-report-{run_id}.pdf",
             mime="application/pdf",
@@ -718,7 +821,7 @@ def page_exports(run_id: str) -> None:
     json_bytes = repo.get_report_bytes(run_id, "admin-report.json")
     if json_bytes:
         st.download_button(
-            "⬇ admin-report.json herunterladen",
+            "Admin-Report JSON herunterladen",
             data=json_bytes,
             file_name=f"admin-report-{run_id}.json",
             mime="application/json",
@@ -737,7 +840,7 @@ def page_exports(run_id: str) -> None:
     summary_bytes = repo.get_report_bytes(run_id, "run-summary.json")
     if summary_bytes:
         st.download_button(
-            "⬇ run-summary.json herunterladen",
+            "Run Summary JSON herunterladen",
             data=summary_bytes,
             file_name=f"run-summary-{run_id}.json",
             mime="application/json",
@@ -757,7 +860,7 @@ def page_exports(run_id: str) -> None:
         raw = repo.get_report_bytes(run_id, fname)
         if raw:
             st.download_button(
-                f"⬇ {fname}",
+                f"{fname} herunterladen",
                 data=raw,
                 file_name=f"{fname.replace('.csv', '')}-{run_id}.csv",
                 mime="text/csv",
@@ -830,6 +933,102 @@ def page_cockpit() -> None:
         "Ungetaggt": summary.get("files_untagged", 0),
         "Laufzeit": f"{summary.get('duration_seconds', 0):.0f}s",
     })
+
+    # Verteilungen & Analysen (Donut / Pie Charts & Coverage Metrics)
+    st.divider()
+    st.subheader("Verteilungen & Analysen")
+    details_df = _csv(latest, "classification-details.csv")
+    if not details_df.empty:
+        import altair as alt  # noqa: PLC0415
+        
+        col1, col2, col3 = st.columns(3)
+        
+        # 1. Classes / Tags distribution
+        with col1:
+            st.markdown("##### Klassifizierung (Tags)")
+            class_col = "class" if "class" in details_df.columns else "class_label"
+            if class_col in details_df.columns:
+                counts = details_df[class_col].fillna("unbekannt").astype(str).value_counts().reset_index()
+                counts.columns = ["Klasse", "Anzahl"]
+                
+                chart = alt.Chart(counts).mark_arc(innerRadius=40, outerRadius=90).encode(
+                    theta=alt.Theta("Anzahl:Q", stack=True),
+                    color=alt.Color("Klasse:N", scale=alt.Scale(scheme="tableau10"), legend=alt.Legend(orient="bottom")),
+                    tooltip=["Klasse", "Anzahl"]
+                ).properties(height=230)
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.caption("Klassenspalte nicht gefunden.")
+                
+        # 2. File extensions distribution
+        with col2:
+            st.markdown("##### Dateitypen (Endung)")
+            ext_col = "extension"
+            if ext_col in details_df.columns:
+                counts = details_df[ext_col].fillna("unbekannt").astype(str).str.lower().value_counts().reset_index()
+                counts.columns = ["Dateiendung", "Anzahl"]
+                # Keep top 5 and group others
+                if len(counts) > 5:
+                    top5 = counts.iloc[:5]
+                    others_sum = counts.iloc[5:]["Anzahl"].sum()
+                    others_df = pd.DataFrame([{"Dateiendung": "Andere", "Anzahl": others_sum}])
+                    counts = pd.concat([top5, others_df], ignore_index=True)
+                
+                chart = alt.Chart(counts).mark_arc(innerRadius=40, outerRadius=90).encode(
+                    theta=alt.Theta("Anzahl:Q", stack=True),
+                    color=alt.Color("Dateiendung:N", scale=alt.Scale(scheme="accent"), legend=alt.Legend(orient="bottom")),
+                    tooltip=["Dateiendung", "Anzahl"]
+                ).properties(height=230)
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.caption("Dateiendungsspalte nicht gefunden.")
+                
+        # 3. DSGVO relevancy
+        with col3:
+            st.markdown("##### Sicherheitsmerkmale (DSGVO)")
+            dsgvo_col = "dsgvo"
+            if dsgvo_col in details_df.columns:
+                # Map true/false to readable text
+                val_mapped = details_df[dsgvo_col].astype(str).map({"true": "DSGVO relevant", "false": "Nicht relevant", "NaN": "Unbekannt"}).fillna("Unbekannt")
+                counts = val_mapped.value_counts().reset_index()
+                counts.columns = ["Status", "Anzahl"]
+                
+                chart = alt.Chart(counts).mark_arc(innerRadius=40, outerRadius=90).encode(
+                    theta=alt.Theta("Anzahl:Q", stack=True),
+                    color=alt.Color("Status:N", scale=alt.Scale(scheme="category10"), legend=alt.Legend(orient="bottom")),
+                    tooltip=["Status", "Anzahl"]
+                ).properties(height=230)
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.caption("DSGVO-Spalte nicht gefunden.")
+
+        # Coverage Indicators
+        st.divider()
+        st.markdown("##### Metadaten- & Tagging-Coverage")
+        c_meta_1, c_meta_2, c_meta_3 = st.columns(3)
+        
+        total_files = len(details_df)
+        with_meta = details_df["metadata_written"].astype(str).eq("true").sum() if "metadata_written" in details_df.columns else 0
+        with_tags = details_df["tags_written"].astype(str).eq("true").sum() if "tags_written" in details_df.columns else 0
+        with_llm = details_df["llm_used"].astype(str).eq("true").sum() if "llm_used" in details_df.columns else 0
+        
+        c_meta_1.metric(
+            "Metadaten geschrieben", 
+            f"{with_meta} / {total_files}", 
+            f"{with_meta/total_files*100:.1f}% Coverage" if total_files > 0 else "0%"
+        )
+        c_meta_2.metric(
+            "Blob-Tags geschrieben", 
+            f"{with_tags} / {total_files}", 
+            f"{with_tags/total_files*100:.1f}% Coverage" if total_files > 0 else "0%"
+        )
+        c_meta_3.metric(
+            "LLM KI-Analyse genutzt", 
+            f"{with_llm} / {total_files}", 
+            f"{with_llm/total_files*100:.1f}% aller Dateien" if total_files > 0 else "0%"
+        )
+    else:
+        st.warning("Keine detaillierten Klassifizierungsdaten für Diagrammverteilung vorhanden.")
 
     risks = admin.get("risk_assessment", [])
     if risks:
@@ -1368,7 +1567,9 @@ def page_reports_exports(run_id: str) -> None:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Admin-Report PDF")
-        pdf_bytes = repo.get_report_bytes(run_id, "admin-report.pdf")
+        pdf_bytes = compile_pdf_on_the_fly_frontend(run_id)
+        if not pdf_bytes:
+            pdf_bytes = repo.get_report_bytes(run_id, "admin-report.pdf")
         if pdf_bytes:
             st.download_button(
                 "Admin-Report PDF herunterladen",

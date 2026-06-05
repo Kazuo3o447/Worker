@@ -485,19 +485,85 @@ def _build_admin_report_json(
     return json.dumps(report, indent=2, default=str).encode("utf-8")
 
 
+def _draw_reportlab_pie_chart(
+    data: list[int],
+    labels: list[str],
+    width: float = 400,
+    height: float = 160,
+) -> Any:
+    """Build a beautiful vector pie chart using ReportLab."""
+    from reportlab.graphics.shapes import Drawing, String  # noqa: PLC0415
+    from reportlab.graphics.charts.piecharts import Pie  # noqa: PLC0415
+    from reportlab.graphics.charts.legends import Legend  # noqa: PLC0415
+    from reportlab.lib import colors  # noqa: PLC0415
+
+    d = Drawing(width, height)
+    if not data:
+        d.add(String(20, height // 2, "Keine Daten verfügbar", fontName="Helvetica", fontSize=10, fillColor=colors.grey))
+        return d
+
+    pc = Pie()
+    pc.x = 20
+    pc.y = 10
+    pc.width = height - 20
+    pc.height = height - 20
+    pc.data = data
+    pc.labels = [f"{v}" for v in data]  # numbers on slices
+    pc.simpleLabels = 0
+
+    palette = [
+        colors.HexColor("#003366"),  # dark blue
+        colors.HexColor("#006699"),  # medium blue
+        colors.HexColor("#3399CC"),  # light blue
+        colors.HexColor("#33CC99"),  # teal/green
+        colors.HexColor("#FFCC00"),  # gold
+        colors.HexColor("#FF6666"),  # coral/red
+        colors.HexColor("#9966FF"),  # purple
+    ]
+    for i, color in enumerate(palette):
+        if i < len(data):
+            pc.slices[i].fillColor = color
+            pc.slices[i].labelRadius = 0.65
+            pc.slices[i].fontColor = colors.white
+            pc.slices[i].fontName = "Helvetica-Bold"
+            pc.slices[i].fontSize = 8
+
+    # Legend
+    legend = Legend()
+    legend.x = height + 10
+    legend.y = height - 10
+    legend.dx = 8
+    legend.dy = 8
+    legend.fontSize = 8
+    legend.fontName = "Helvetica"
+    legend.boxAnchor = "nw"
+    legend.columnMaximum = 8
+    legend.strokeWidth = 0
+    legend.strokeColor = colors.transparent
+    legend.colorNamePairs = [(pc.slices[i].fillColor, labels[i]) for i in range(len(data))]
+
+    d.add(pc)
+    d.add(legend)
+    return d
+
+
 def _build_admin_report_pdf(
     summary: RunSummary,
     results: list[ClassificationResult],
 ) -> bytes:
-    """Build admin-report.pdf using ReportLab."""
+    """Build admin-report.pdf using ReportLab with multi-page orientation support."""
     try:
         from reportlab.lib import colors  # noqa: PLC0415
-        from reportlab.lib.pagesizes import A4  # noqa: PLC0415
+        from reportlab.lib.pagesizes import A4, landscape  # noqa: PLC0415
         from reportlab.lib.styles import getSampleStyleSheet  # noqa: PLC0415
         from reportlab.lib.units import cm  # noqa: PLC0415
         from reportlab.platypus import (  # noqa: PLC0415
             Paragraph,
-            SimpleDocTemplate,
+            BaseDocTemplate,
+            PageTemplate,
+            Frame,
+            NextPageTemplate,
+            PageBreak,
             Spacer,
             Table,
             TableStyle,
@@ -506,8 +572,19 @@ def _build_admin_report_pdf(
         raise ImportError("reportlab is required for PDF generation. Add it to requirements.txt.") from exc
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm,
-                            topMargin=2 * cm, bottomMargin=2 * cm)
+    
+    # Setup document with dual page formats: Portrait & Landscape
+    width_p, height_p = A4
+    width_l, height_l = landscape(A4)
+    
+    frame_p = Frame(2 * cm, 2 * cm, width_p - 4 * cm, height_p - 4 * cm, id="F_Portrait")
+    frame_l = Frame(2 * cm, 2 * cm, width_l - 4 * cm, height_l - 4 * cm, id="F_Landscape")
+    
+    template_p = PageTemplate(id="Portrait", frames=frame_p, pagesize=A4)
+    template_l = PageTemplate(id="Landscape", frames=frame_l, pagesize=landscape(A4))
+    
+    doc = BaseDocTemplate(buf, pageTemplates=[template_p, template_l])
+    
     styles = getSampleStyleSheet()
     story = []
 
@@ -557,30 +634,79 @@ def _build_admin_report_pdf(
     story.append(_pdf_table(m_data))
     story.append(Spacer(1, 0.3 * cm))
 
-    # Classification Distribution
+    # Classification Distribution (Table & Pie Chart layout)
     story.append(Paragraph("Klassenverteilung", styles["Heading2"]))
     class_counts: dict[str, int] = {}
     for r in results:
         if r.action not in ("error", "skipped"):
             class_counts[r.class_label] = class_counts.get(r.class_label, 0) + 1
+            
     if class_counts:
         c_data = [["Klasse", "Anzahl"]] + [
             [k, str(v)] for k, v in sorted(class_counts.items(), key=lambda x: -x[1])
         ]
-        story.append(_pdf_table(c_data, header=True))
+        
+        # Build nice side-by-side layout with our custom vector pie chart!
+        sorted_classes = sorted(class_counts.items(), key=lambda x: -x[1])
+        slice_data = [v for k, v in sorted_classes[:5]]
+        slice_labels = [f"{k}" for k, v in sorted_classes[:5]]
+        if len(sorted_classes) > 5:
+            other_sum = sum(v for k, v in sorted_classes[5:])
+            slice_data.append(other_sum)
+            slice_labels.append("Andere")
+            
+        chart_drawing = _draw_reportlab_pie_chart(slice_data, slice_labels, width=280, height=130)
+        c_table = _pdf_table(c_data, header=True, colWidths=[3 * 28.35, 2 * 28.35])
+        
+        layout_table = Table([[c_table, chart_drawing]], colWidths=[6 * 28.35, 10 * 28.35])
+        layout_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(layout_table)
     else:
         story.append(Paragraph("Keine Klassifizierungsdaten.", styles["Normal"]))
     story.append(Spacer(1, 0.3 * cm))
 
-    # Errors
-    if summary.files_error > 0:
-        story.append(Paragraph("Fehlerübersicht", styles["Heading2"]))
-        err_rows = [r for r in results if r.action == "error"][:10]
-        e_data = [["Blob-Name", "Fehler"]] + [
-            [r.blob_name[:60], r.error_reason[:60]] for r in err_rows
+    # File Type Distribution (Table & Pie Chart layout)
+    ext_counts: dict[str, int] = {}
+    for r in results:
+        ext = r.extension or ""
+        if not ext and r.blob_name:
+            _, ext = os.path.splitext(r.blob_name)
+        ext = ext.lower() or "unbekannt"
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
+
+    if ext_counts:
+        story.append(Paragraph("Dateitypenverteilung", styles["Heading2"]))
+        ext_data = [["Dateiendung", "Anzahl"]] + [
+            [k, str(v)] for k, v in sorted(ext_counts.items(), key=lambda x: -x[1])[:8]
         ]
-        story.append(_pdf_table(e_data, header=True))
-        story.append(Spacer(1, 0.3 * cm))
+        
+        sorted_exts = sorted(ext_counts.items(), key=lambda x: -x[1])
+        slice_data_ext = [v for k, v in sorted_exts[:5]]
+        slice_labels_ext = [f"{k}" for k, v in sorted_exts[:5]]
+        if len(sorted_exts) > 5:
+            other_sum_ext = sum(v for k, v in sorted_exts[5:])
+            slice_data_ext.append(other_sum_ext)
+            slice_labels_ext.append("Andere")
+            
+        chart_drawing_ext = _draw_reportlab_pie_chart(slice_data_ext, slice_labels_ext, width=280, height=130)
+        ext_table = _pdf_table(ext_data, header=True, colWidths=[3 * 28.35, 2 * 28.35])
+        
+        layout_table_ext = Table([[ext_table, chart_drawing_ext]], colWidths=[6 * 28.35, 10 * 28.35])
+        layout_table_ext.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(layout_table_ext)
+    story.append(Spacer(1, 0.3 * cm))
 
     # KI Readiness
     story.append(Paragraph("KI Readiness", styles["Heading2"]))
@@ -598,15 +724,53 @@ def _build_admin_report_pdf(
     story.append(_pdf_table(ki_data))
     story.append(Spacer(1, 0.3 * cm))
 
-    # Samples
-    sample_results = [r for r in results if r.action not in ("error",)][:8]
+    # Samples (Goes on a landscape page)
+    sample_results = [r for r in results if r.action not in ("error", "skipped")][:15]
     if sample_results:
-        story.append(Paragraph("Stichproben", styles["Heading2"]))
-        s_data = [["Blob-Name", "Klasse", "Confidence", "Reason"]] + [
-            [r.blob_name[:45], r.class_label, r.confidence, r.reason_code[:25]]
+        # Switch to Landscape layout template
+        story.append(NextPageTemplate("Landscape"))
+        story.append(PageBreak())
+        
+        story.append(Paragraph("Stichproben & Details (Längstseite / Querformat)", styles["Heading1"]))
+        story.append(Paragraph(
+            "Hier finden Sie detaillierte Stichproben von bis zu 15 verarbeiteten Dateien mit "
+            "Klassifizierungen, Sicherheitsmarkierungen (DSGVO, Archivierungs-Kandidat) und LLM-Details.",
+            styles["Normal"]
+        ))
+        story.append(Spacer(1, 0.4 * cm))
+        
+        # Printable width landscape 25.7 cm = 728.6 points
+        # colWidths in cm: 11, 2, 2, 1.5, 2, 1.5, 5.7 -> Total 25.7 cm
+        s_widths = [11 * 28.35, 2 * 28.35, 2 * 28.35, 1.5 * 28.35, 2 * 28.35, 1.5 * 28.35, 5.7 * 28.35]
+        
+        s_data = [["Blob-Name", "Klasse", "Conf.", "DSGVO", "Archiv", "LLM", "Reason / Rule"]] + [
+            [
+                r.blob_name[:65] if len(r.blob_name) > 65 else r.blob_name,
+                r.class_label,
+                f"{r.confidence}%" if r.confidence else "-",
+                "Ja" if getattr(r, "dsgvo", "false") == "true" else "Nein",
+                "Ja" if getattr(r, "archive_candidate", "false") == "true" else "Nein",
+                "Ja" if getattr(r, "llm_used", "false") == "true" else "Nein",
+                r.reason_code or ""
+            ]
             for r in sample_results
         ]
-        story.append(_pdf_table(s_data, header=True))
+        story.append(_pdf_table(s_data, header=True, colWidths=s_widths))
+        story.append(Spacer(1, 0.3 * cm))
+        
+        # Switch back to Portrait layout template for the remaining content
+        story.append(NextPageTemplate("Portrait"))
+        story.append(PageBreak())
+
+    # Errors
+    if summary.files_error > 0:
+        story.append(Paragraph("Fehlerübersicht", styles["Heading2"]))
+        err_rows = [r for r in results if r.action == "error"][:10]
+        e_data = [["Blob-Name", "Fehler"]] + [
+            [r.blob_name[:60] if len(r.blob_name) > 60 else r.blob_name, r.error_reason[:60] if r.error_reason else "Unbekannter Fehler"]
+            for r in err_rows
+        ]
+        story.append(_pdf_table(e_data, header=True))
         story.append(Spacer(1, 0.3 * cm))
 
     # Next Actions
@@ -625,12 +789,14 @@ def _build_admin_report_pdf(
     return buf.getvalue()
 
 
-def _pdf_table(data: list[list[str]], header: bool = False) -> "Table":
-    """Build a simple two-column ReportLab table."""
+def _pdf_table(data: list[list[str]], header: bool = False, colWidths: list[float] | None = None) -> "Table":
+    """Build a simple ReportLab table with optional custom column widths."""
     from reportlab.lib import colors  # noqa: PLC0415
     from reportlab.platypus import Table, TableStyle  # noqa: PLC0415
 
-    t = Table(data, colWidths=[7 * 28.35, 9 * 28.35])
+    if colWidths is None:
+        colWidths = [7 * 28.35, 9 * 28.35]
+    t = Table(data, colWidths=colWidths)
     style = [
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.whitesmoke, colors.white]),

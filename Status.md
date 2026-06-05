@@ -216,6 +216,8 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 | Health-Ampel | ✅ Grün/Gelb/Rot basierend auf errors/unknown/ai_candidates |
 | Empfohlene nächste Aktionen | ✅ Narrativ aus admin-report.json oder berechnet |
 | Run-Tabelle (alle Läufe) | ✅ Tabelle mit Filtern auf der Runs-Seite |
+| Live PDF Compilation | ✅ Generiert PDF on-the-fly mit Layoutwechsel und Vektorgrafiken live aus CSV-Ergebnissen |
+| GEMA Enterprise Style | ✅ Seriöser und professioneller Look unter Verzicht auf bunte/verspielte Emojis sowie einheitlicher Farbwahl |
 | Download-Center | ✅ PDF, JSON, 6 CSVs, JSONL auf Reports & Exporte |
 
 ### Bekannter Login-Flow

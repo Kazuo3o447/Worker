@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import pathlib
 import sys
+import tempfile
 from typing import Optional
 
 import pandas as pd
@@ -17,7 +18,7 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
 # Temp file used to pass device-code URL into the Streamlit UI
-_DEVICE_CODE_MSG_FILE = pathlib.Path("/tmp/azure_device_code.txt")
+_DEVICE_CODE_MSG_FILE = pathlib.Path(tempfile.gettempdir()) / "azure_device_code.txt"
 
 try:
     from frontend.config import FrontendConfig
@@ -53,7 +54,10 @@ class AzureReportRepository:
                     f"2. Code eingeben: **`{user_code}`**\n\n"
                     f"*(Seite aktualisiert sich automatisch nach dem Login.)*"
                 )
-                _DEVICE_CODE_MSG_FILE.write_text(msg, encoding="utf-8")
+                try:
+                    _DEVICE_CODE_MSG_FILE.write_text(msg, encoding="utf-8")
+                except Exception:  # noqa: BLE001
+                    pass  # Non-critical – message also printed to stderr
                 # Also write to container stderr so it appears in docker logs
                 print(
                     f"\n[DEVICE CODE AUTH] Open {verification_uri} and enter code: {user_code}\n",

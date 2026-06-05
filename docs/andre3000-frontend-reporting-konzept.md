@@ -303,24 +303,46 @@ Dateiliste über `repo.list_report_files(run_id)`.
 
 ---
 
-## 13. Admin-Report PDF
+## 13. Admin-Report PDF & Dynamische Bericht-Generierung
 
-Erzeugt mit ReportLab (best-effort – PDF-Fehler blockieren keinen Lauf).
+Erzeugt mit ReportLab (best-effort – PDF-Fehler blockieren keinen Lauf). 
 
-Inhalte:
-1. Titel + Worker-Info
-2. Run Info (Tabelle)
-3. Azure Storage
-4. Kennzahlen
-5. Klassenverteilung
-6. Fehlerübersicht (wenn vorhanden)
-7. KI Readiness
-8. Stichproben
-9. Empfohlene nächste Schritte
+### Layout & Orientierungswechsel (Portrait/Landscape)
+Der PDF-Bericht verwendet nun abwechselnde Seitenausrichtungen (Dual-Page-Design mit `BaseDocTemplate`):
+- **Hochformat (A4 Portrait):** Titelseite, Run Information, Azure-Kontext, KPIs, Klassenverteilung und Fehlerübersicht.
+- **Querformat (A4 Landscape / Längsseite):** Verwendet für den Bereich **Stichproben**. Hier steht das gesamte A4-Querformat (25,7 cm bedruckbare Breite) zur Verfügung, sodass 15 representative Dateien übersichtlich mit allen Details gelistet werden.
+- **Spalten der Stichproben-Tabelle (A4 Landscape):**
+  1. Blob-Name (gekürzt auf max. 65 Zeichen, um ein sauberes Druckbild zu garantieren)
+  2. Klasse
+  3. Konfidenzwert (Conf.)
+  4. DSGVO-Relevanz
+  5. Archivierungs-Kandidat
+  6. LLM-Einsatz
+  7. Grundcode / Pfad-Regel
+- **Rückkehr zum Hochformat:** Nach den Stichproben wird zurück auf das Portrait-Layout geschaltet.
+
+### Native Vektor-Kreisdiagramme
+Integrierte, hochauflösende Vektor-Kreisdiagramme nebeneinander (Side-by-Side) mit den Daten-Tabellen für:
+- **Klassenverteilung**
+- **Dateitypenverteilung** (die Top-5-Dateiendungen einzeln aufgelistet, kleinere Mengen aggregiert unter „Andere“)
+
+### On-The-Fly-PDF-Compiler im Frontend
+Um zu verhindern, dass Benutzer beim Auswerten älterer Läufe veraltete PDF-Dateien aus Azure herunterladen, wurde im Frontend-Dashboard ein **Live-HTML/PDF-Compiler** implementiert:
+- Bei jedem Klick auf den Download-Button des PDF-Berichts kompiliert das Streamlit-Dashboard die rohen CSV-Ergebnisdaten des Laufs live im Arbeitsspeicher zu einem topaktuellen PDF-Bericht (mit den neuen Vektordiagrammen und Längsseiten-Querformaten).
+- Sollten rohe CSV-Daten fehlen, erfolgt ein automatischer Fallback auf den statisch hochgeladenen PDF-Bericht in Azure.
 
 ---
 
-## 14. Sicherheitsregeln
+## 14. GEMA-konformes Enterprise Design & Seriöse Optik
+
+Um dem professionellen Anspruch der GEMA gerecht zu werden, wurde das gesamte Frontend-Design überarbeitet:
+- **Keine bunten/verspielten Emojis:** Alle Emoticons (wie `📊`, `🏷️`, `📁`, `🔐`, `🎯`, `🤖`, `📤`, `⬇`, `⚠️` etc.) wurden konsequent aus allen Titeln, Menüs, Sektionen, KPIs und Aktions-Bannern eliminiert.
+- **Farblich harmonisches Interface:** Sämtliche Diagramme (sowohl Altair-Donut-Diagramme im Cockpit als auch ReportLab-Kuchendiagramme im PDF) nutzen eine perfekt aufeinander abgestimmte, sachliche Farbpalette auf Basis von GEMA-nahen Blau-, Teal- und Grautönen.
+- **Korrektur von Altair-Diagrammen:** Bei Single-Class- oder Single-Extension-Zuständen (z. B. wenn alle Dateien als `unknown` erfasst wurden) wird die Altair-Theta-Achse jetzt sauber gestapelt (`stack=True`), um Fehler wie „Infinite extent“ im Browser vollständig auszuschließen.
+
+---
+
+## 15. Sicherheitsregeln
 
 ### Read-only (Frontend)
 - Keine `set_blob_tags()` / `set_blob_metadata()` / `delete_blob()` / `upload_blob()` Aufrufe
