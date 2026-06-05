@@ -1,0 +1,10 @@
+# Worker dependencies
+azure-identity>=1.17.0
+azure-storage-blob>=12.22.0
+python-dotenv>=1.0.0
+
+# Optional: AI Foundry (enable when AI_PROVIDER=foundry)
+# openai>=1.30.0
+
+# Development / tests
+pytest>=8.0.0

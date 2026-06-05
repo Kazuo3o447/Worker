@@ -1,0 +1,35 @@
+services:
+  # -------------------------------------------------------------------------
+  # Worker – Batch-Klassifizierungs-Job
+  # Nicht dauerhaft – wird per "docker compose run" gestartet.
+  # Beispiel: docker compose run --rm worker --mode classify --max-files 50 --dry-run
+  # -------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    # Kein Volume local-reports mehr – Reports gehen direkt nach Azure
+    entrypoint: ["python", "-m", "app.main"]
+    profiles:
+      - worker  # verhindert unbeabsichtigtes Starten per "docker compose up"
+
+  # -------------------------------------------------------------------------
+  # Dashboard – Streamlit UI (dauerhaft laufend, liest aus Azure)
+  # Starten: docker compose up dashboard
+  # -------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "8501:8501"
+    # Kein Volume local-reports – Dashboard liest direkt aus Azure
+    restart: unless-stopped
+    command: >
+      streamlit run app.py
+      --server.address=0.0.0.0
+      --server.port=8501
+      --server.headless=true
+      --browser.gatherUsageStats=false
