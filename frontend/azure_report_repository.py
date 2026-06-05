@@ -48,7 +48,7 @@ class AzureReportRepository:
 
             def _device_code_cb(verification_uri: str, user_code: str, expires_on: object) -> None:  # noqa: ANN001
                 msg = (
-                    f"### 🔐 Azure-Login erforderlich\n\n"
+                    f"### Azure-Login erforderlich\n\n"
                     f"1. Öffne im Browser: {verification_uri}\n\n"
                     f"2. Code eingeben: **`{user_code}`**\n\n"
                     f"*(Seite aktualisiert sich automatisch nach dem Login.)*"

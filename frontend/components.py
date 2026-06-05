@@ -14,18 +14,18 @@ import streamlit as st
 
 def dry_run_badge(is_dry_run: bool) -> None:
     if is_dry_run:
-        st.warning("🔵 **DRY RUN** – In diesem Lauf wurden keine Blob-Tags und keine Metadata in Azure geschrieben.")
+        st.warning("**[DRY RUN]** – In diesem Lauf wurden keine Blob-Tags und keine Metadata in Azure geschrieben.")
 
 
 def error_banner(count: int) -> None:
     if count > 0:
-        st.error(f"⚠️ **{count} Fehler** in diesem Lauf. Bitte die Fehler-Seite prüfen.")
+        st.error(f"**{count} Fehler** in diesem Lauf. Bitte die Fehler-Seite prüfen.")
     else:
-        st.success("✅ Keine Fehler in diesem Lauf.")
+        st.success("Keine Fehler in diesem Lauf.")
 
 
 def empty_state(message: str) -> None:
-    st.info(f"ℹ️ {message}")
+    st.info(message)
 
 
 # ---------------------------------------------------------------------------
@@ -98,15 +98,15 @@ def text_search_filter(
 # ---------------------------------------------------------------------------
 
 CLASS_COLOURS: dict[str, str] = {
-    "br": "🔴",
-    "hr": "🟠",
-    "dsgvo": "🔴",
-    "finance": "🟡",
-    "contract": "🟣",
-    "technical": "🔵",
-    "unknown": "⚫",
-    "unreadable": "⚪",
-    "error": "❌",
+    "br":          "[BR]",
+    "hr":          "[HR]",
+    "dsgvo":       "[DSGVO]",
+    "finance":     "[FIN]",
+    "contract":    "[VERT]",
+    "technical":   "[TECH]",
+    "unknown":     "[?]",
+    "unreadable":  "[-]",
+    "error":       "[ERR]",
 }
 
 

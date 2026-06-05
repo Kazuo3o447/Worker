@@ -21,7 +21,7 @@ _DEVICE_CODE_MSG_FILE = pathlib.Path("/tmp/azure_device_code.txt")
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="GEMA Classification Pilot",
-    page_icon="🗂️",
+    page_icon="G",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -76,11 +76,11 @@ _ensure_auth_thread()
 _auth = _get_auth_state()
 
 if not _auth["event"].is_set():
-    st.title("🗂️ GEMA Classification Pilot")
+    st.title("GEMA Classification Pilot")
     if _DEVICE_CODE_MSG_FILE.exists():
         st.info(_DEVICE_CODE_MSG_FILE.read_text(encoding="utf-8"))
     else:
-        st.info("⏳ Verbinde mit Azure Blob Storage...")
+        st.info("Verbinde mit Azure Blob Storage ...")
     _wait = st.session_state.get("_auth_wait", 0) + 1
     st.session_state["_auth_wait"] = _wait
     if _wait > 300:  # 5-Minuten-Timeout
@@ -102,7 +102,7 @@ repo = _get_repo()
 # ---------------------------------------------------------------------------
 # Sidebar – run selection & navigation
 # ---------------------------------------------------------------------------
-st.sidebar.title("🗂️ GEMA Classification")
+st.sidebar.title("GEMA Classification")
 st.sidebar.caption(f"Storage Klassifizierungs-Pilot · Worker {repo.config.worker_version}")
 st.sidebar.markdown("---")
 
@@ -126,16 +126,16 @@ selected_run = st.sidebar.selectbox(
 )
 
 PAGES = [
-    "🏠 Übersicht",
-    "📊 Klassenverteilung",
-    "📋 Klassifizierungs-Details",
-    "🤖 KI-Analyse",
-    "❌ Fehler",
-    "🔍 Ungetaggte Dateien",
-    "🧪 Stichproben / Review",
-    "📝 Logs",
-    "🤖 LLM Readiness",
-    "🚀 Run Commands",
+    "Übersicht",
+    "Klassenverteilung",
+    "Klassifizierungs-Details",
+    "KI-Analyse",
+    "Fehler",
+    "Ungetaggte Dateien",
+    "Stichproben / Review",
+    "Logs",
+    "LLM Readiness",
+    "Run Commands",
 ]
 
 page = st.sidebar.radio("Navigation", PAGES, label_visibility="collapsed")
@@ -171,7 +171,7 @@ def _events(run_id: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def page_overview(run_id: str) -> None:
-    st.header("🏠 Lauf-Übersicht")
+    st.header("Lauf-Übersicht")
     summary = _summary(run_id)
     if not summary:
         comp.empty_state("run-summary.json nicht gefunden.")
@@ -209,7 +209,7 @@ def page_overview(run_id: str) -> None:
 
     comp.error_banner(int(summary.get("files_error", 0)))
 
-    with st.expander("📄 Vollständiges run-summary.json anzeigen"):
+    with st.expander("run-summary.json (vollständig)"):
         st.json(summary)
 
 
@@ -218,7 +218,7 @@ def page_overview(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_class_distribution(run_id: str) -> None:
-    st.header("📊 Klassenverteilung")
+    st.header("Klassenverteilung")
     df = _csv(run_id, "classification-summary.csv")
     if df.empty:
         comp.empty_state("classification-summary.csv nicht gefunden.")
@@ -252,7 +252,7 @@ def page_class_distribution(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_details(run_id: str) -> None:
-    st.header("📋 Klassifizierungs-Details")
+    st.header("Klassifizierungs-Details")
     df = _csv(run_id, "classification-details.csv")
     if df.empty:
         comp.empty_state("classification-details.csv nicht gefunden oder leer.")
@@ -260,7 +260,7 @@ def page_details(run_id: str) -> None:
 
     st.caption(f"{len(df)} Einträge geladen")
 
-    with st.expander("🔽 Filter", expanded=True):
+    with st.expander("Filter", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
             df = comp.multiselect_filter(df, "class", "Klasse")
@@ -289,16 +289,16 @@ def page_details(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_errors(run_id: str) -> None:
-    st.header("❌ Fehler")
+    st.header("Fehler")
     df = _csv(run_id, "classification-errors.csv")
 
     if df.empty:
-        st.success("✅ Keine Fehler in diesem Lauf.")
+        st.success("Keine Fehler in diesem Lauf.")
         return
 
-    st.error(f"⚠️ **{len(df)} Fehler** gefunden")
+    st.error(f"**{len(df)} Fehler** gefunden")
 
-    with st.expander("🔽 Filter", expanded=False):
+    with st.expander("Filter", expanded=False):
         df = comp.multiselect_filter(df, "error_stage", "Fehler-Stufe")
         df = comp.text_search_filter(df, "error_reason", "Fehler-Grund enthält")
 
@@ -310,7 +310,7 @@ def page_errors(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_untagged(run_id: str) -> None:
-    st.header("🔍 Ungetaggte Dateien")
+    st.header("Ungetaggte Dateien")
     df = _csv(run_id, "untagged-files.csv")
 
     if df.empty:
@@ -319,7 +319,7 @@ def page_untagged(run_id: str) -> None:
 
     st.info(f"**{len(df)} ungetaggte / retry-fähige Dateien** in diesem Lauf erkannt.")
 
-    with st.expander("🔽 Filter", expanded=False):
+    with st.expander("Filter", expanded=False):
         df = comp.multiselect_filter(df, "extension", "Dateiendung")
         df = comp.multiselect_filter(df, "reason", "Grund")
 
@@ -331,7 +331,7 @@ def page_untagged(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_samples(run_id: str) -> None:
-    st.header("🧪 Stichproben für fachliche Prüfung")
+    st.header("Stichproben – fachliche Prüfung")
     df = _csv(run_id, "classification-samples.csv")
 
     if df.empty:
@@ -352,8 +352,7 @@ def page_samples(run_id: str) -> None:
 
     for grp in selected_groups:
         grp_df = df[df["sample_group"] == grp]
-        icon = comp.class_icon(grp)
-        with st.expander(f"{icon} Klasse: **{grp}** ({len(grp_df)} Stichproben)", expanded=grp in ("unknown", "br", "hr", "dsgvo")):
+        with st.expander(f"Klasse: {grp}  ({len(grp_df)} Stichproben)", expanded=grp in ("unknown", "br", "hr", "dsgvo")):
             comp.show_dataframe(grp_df, height=280)
 
 
@@ -362,7 +361,7 @@ def page_samples(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_logs(run_id: str) -> None:
-    st.header("📝 Lauf-Events (run-events.jsonl)")
+    st.header("Lauf-Events (run-events.jsonl)")
     df = _events(run_id)
 
     if df.empty:
@@ -374,7 +373,7 @@ def page_logs(run_id: str) -> None:
 
     st.caption(f"{len(df)} Events geladen")
 
-    with st.expander("🔽 Filter", expanded=True):
+    with st.expander("Filter", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
             df = comp.multiselect_filter(df, "level", "Log-Level")
@@ -386,7 +385,7 @@ def page_logs(run_id: str) -> None:
     # Errors prominently
     error_df = df[df["level"].isin(["ERROR", "WARNING"])] if "level" in df.columns else pd.DataFrame()
     if not error_df.empty:
-        with st.expander(f"⚠️ {len(error_df)} Fehler/Warnungen", expanded=True):
+        with st.expander(f"{len(error_df)} Fehler / Warnungen", expanded=True):
             comp.show_dataframe(error_df, height=250)
 
     st.subheader("Alle Events")
@@ -400,14 +399,14 @@ def page_logs(run_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def page_ai_analysis(run_id: str) -> None:
-    st.header("🤖 KI-Analyse")
+    st.header("KI-Analyse")
     summary = _summary(run_id)
     ai_enabled = summary.get("enable_ai", False)
     ai_provider = summary.get("ai_provider", "none")
 
     if not ai_enabled or ai_provider == "none":
         st.info(
-            "ℹ️ **KI war in diesem Lauf deaktiviert** (`ENABLE_AI=false` oder `AI_PROVIDER=none`).\n\n"
+            "**KI war in diesem Lauf deaktiviert** (`ENABLE_AI=false` oder `AI_PROVIDER=none`).\n\n"
             "Die Tabelle unten zeigt Dateien, die für einen KI-Aufruf in Frage kämen."
         )
 
@@ -426,7 +425,7 @@ def page_ai_analysis(run_id: str) -> None:
     cand_df = _csv(run_id, "ai-candidates.csv")
     if not cand_df.empty:
         st.subheader(f"KI-Kandidaten ({len(cand_df)} Einträge)")
-        with st.expander("🔽 Filter", expanded=False):
+        with st.expander("Filter", expanded=False):
             cand_df = comp.multiselect_filter(cand_df, "ai_candidate_reason", "Kandidat-Grund")
             cand_df = comp.multiselect_filter(cand_df, "ai_skipped_reason", "Skip-Grund")
             cand_df = comp.multiselect_filter(cand_df, "extension", "Dateiendung")
@@ -466,7 +465,7 @@ docker compose run --rm worker --mode classify --enable-ai --ai-provider foundry
 # ---------------------------------------------------------------------------
 
 def page_run_commands(run_id: str) -> None:
-    st.header("🚀 Run Commands")
+    st.header("Run Commands")
     st.info("Das Dashboard startet den Worker **nicht** selbst. Kopiere die Befehle ins Terminal.")
 
     st.subheader("1 · Scan (nur lesen, keine Schreiboperationen)")
@@ -507,7 +506,7 @@ az containerapp job start \\
   -- --mode classify --max-files 500
 """, language="bash")
 
-    st.button("▶ Worker starten (deaktiviert im MVP)", disabled=True,
+    st.button("Worker starten (deaktiviert im MVP)", disabled=True,
               help="Startlogik folgt in einer späteren Version.")
 
 
@@ -516,15 +515,15 @@ az containerapp job start \\
 # ---------------------------------------------------------------------------
 
 ROUTER = {
-    "🏠 Übersicht": page_overview,
-    "📊 Klassenverteilung": page_class_distribution,
-    "📋 Klassifizierungs-Details": page_details,
-    "🤖 KI-Analyse": page_ai_analysis,
-    "❌ Fehler": page_errors,
-    "🔍 Ungetaggte Dateien": page_untagged,
-    "🧪 Stichproben / Review": page_samples,
-    "📝 Logs": page_logs,
-    "🚀 Run Commands": page_run_commands,
+    "Übersicht": page_overview,
+    "Klassenverteilung": page_class_distribution,
+    "Klassifizierungs-Details": page_details,
+    "KI-Analyse": page_ai_analysis,
+    "Fehler": page_errors,
+    "Ungetaggte Dateien": page_untagged,
+    "Stichproben / Review": page_samples,
+    "Logs": page_logs,
+    "Run Commands": page_run_commands,
 }
 
 handler = ROUTER.get(page)
