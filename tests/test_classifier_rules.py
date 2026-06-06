@@ -207,6 +207,34 @@ class TestShouldProcessBlob:
         ok, reason = should_process_blob({"status": "some_future_status"})
         assert ok is True
 
+    # --- needs_ai retry behaviour (new) ---
+
+    def test_classified_needs_ai_true_should_retry(self):
+        """status=classified + needs_ai=true → allow re-processing for AI."""
+        ok, reason = should_process_blob({"status": "classified", "needs_ai": "true"})
+        assert ok is True
+        assert "needs_ai=true" in reason
+
+    def test_classified_needs_ai_false_skip(self):
+        """status=classified + needs_ai=false → final, skip."""
+        ok, _ = should_process_blob({"status": "classified", "needs_ai": "false"})
+        assert ok is False
+
+    def test_classified_no_needs_ai_tag_skip(self):
+        """status=classified, no needs_ai tag → skip (final by default)."""
+        ok, _ = should_process_blob({"status": "classified"})
+        assert ok is False
+
+    def test_pending_ai_should_process(self):
+        """status=pending_ai → in retry statuses, should process."""
+        ok, reason = should_process_blob({"status": "pending_ai"})
+        assert ok is True
+
+    def test_needs_ai_true_but_status_skipped_skip(self):
+        """status=skipped + needs_ai=true → skipped is final regardless of needs_ai."""
+        ok, _ = should_process_blob({"status": "skipped", "needs_ai": "true"})
+        assert ok is False
+
 
 # ---------------------------------------------------------------------------
 # _get_extension helper

@@ -44,8 +44,15 @@ class AzureStorageClient:
 
         if mode == "device_code":
             # Prints a login URL + code to stdout on first auth – intended for local Docker use.
-            from azure.identity import DeviceCodeCredential  # noqa: PLC0415
-            credential = DeviceCodeCredential()
+            # TokenCachePersistenceOptions caches the token on disk (DPAPI-encrypted on Windows)
+            # so subsequent runs within the token lifetime do not require re-authentication.
+            from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions  # noqa: PLC0415
+            credential = DeviceCodeCredential(
+                cache_persistence_options=TokenCachePersistenceOptions(
+                    name="andre3000",
+                    allow_unencrypted_storage=True,  # required on Linux (Docker)
+                )
+            )
         else:
             # AUTH_MODE=default: works with `az login` locally and Managed Identity in Azure.
             credential = DefaultAzureCredential()

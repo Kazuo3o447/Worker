@@ -25,6 +25,20 @@ _DETAIL_COLS = [
     "dsgvo", "archive_candidate", "confidence", "readable", "llm_used",
     "ai_provider", "ai_candidate", "ai_reason", "ai_input_chars", "ai_skipped_reason",
     "needs_ai", "reason_code", "error_reason", "metadata_written", "tags_written", "duration_ms",
+    # AI detailed fields
+    "ai_called", "ai_success", "ai_error", "ai_model", "ai_prompt_version",
+    "ai_prompt_chars", "ai_text_extract_chars",
+    "ai_estimated_prompt_tokens_raw", "ai_estimated_prompt_tokens_buffered",
+    "ai_estimated_prompt_tokens",
+    "ai_prompt_tokens", "ai_completion_tokens", "ai_total_tokens",
+    "ai_token_source", "ai_latency_ms",
+    "ai_class", "ai_confidence_ai", "ai_reason_code_ai", "ai_explanation_short",
+    "retry_recommended",
+    # Extraction fields (AP2)
+    "extractor_type", "extraction_status", "extraction_method",
+    "text_available", "text_chars_total", "text_chars_for_ai",
+    "content_hash_sha256", "extraction_error_code", "extraction_error_message_sanitized",
+    "pages_total", "pages_sampled", "extraction_duration_ms",
 ]
 
 _ERROR_COLS = [
@@ -45,7 +59,13 @@ _SAMPLE_COLS = [
 _AI_CANDIDATE_COLS = [
     "run_id", "detected_at", "blob_name", "extension", "size_bytes",
     "rule_class", "rule_confidence", "reason_code",
-    "ai_candidate_reason", "ai_would_call", "ai_skipped_reason",
+    "ai_candidate_reason", "ai_would_call", "ai_called", "ai_skipped_reason",
+    "needs_ai", "retry_recommended", "previous_status", "previous_class", "previous_llm_used",
+    "budget_available",
+    "extraction_status", "extraction_method", "extracted_chars",
+    "ai_model", "ai_prompt_chars",
+    "ai_estimated_prompt_tokens_raw", "ai_estimated_prompt_tokens_buffered",
+    "ai_estimated_prompt_tokens",
 ]
 
 _SUMMARY_KV_COLS = ["key", "value"]
@@ -101,6 +121,40 @@ def _result_to_row(r: ClassificationResult) -> dict[str, Any]:
         "metadata_written": r.metadata_written,
         "tags_written": r.tags_written,
         "duration_ms": r.duration_ms,
+        # Extraction fields
+        "extractor_type": getattr(r, "extractor_type", ""),
+        "extraction_status": getattr(r, "extraction_status", ""),
+        "extraction_method": getattr(r, "extraction_method", ""),
+        "text_available": getattr(r, "text_available", False),
+        "text_chars_total": getattr(r, "text_chars_total", 0),
+        "text_chars_for_ai": getattr(r, "text_chars_for_ai", 0),
+        "content_hash_sha256": getattr(r, "content_hash_sha256", ""),
+        "extraction_error_code": getattr(r, "extraction_error_code", ""),
+        "extraction_error_message_sanitized": getattr(r, "extraction_error_message_sanitized", ""),
+        "pages_total": getattr(r, "pages_total", 0),
+        "pages_sampled": getattr(r, "pages_sampled", 0),
+        "extraction_duration_ms": getattr(r, "extraction_duration_ms", 0),
+        # AI detailed fields
+        "ai_called": getattr(r, "ai_called", False),
+        "ai_success": getattr(r, "ai_success", False),
+        "ai_error": getattr(r, "ai_error", ""),
+        "ai_model": getattr(r, "ai_model", ""),
+        "ai_prompt_version": getattr(r, "ai_prompt_version", ""),
+        "ai_prompt_chars": getattr(r, "ai_prompt_chars", 0),
+        "ai_text_extract_chars": getattr(r, "ai_text_extract_chars", 0),
+        "ai_estimated_prompt_tokens": getattr(r, "ai_estimated_prompt_tokens", 0),
+        "ai_estimated_prompt_tokens_raw": getattr(r, "ai_estimated_prompt_tokens_raw", 0),
+        "ai_estimated_prompt_tokens_buffered": getattr(r, "ai_estimated_prompt_tokens_buffered", 0),
+        "ai_prompt_tokens": getattr(r, "ai_prompt_tokens", None),
+        "ai_completion_tokens": getattr(r, "ai_completion_tokens", None),
+        "ai_total_tokens": getattr(r, "ai_total_tokens", None),
+        "ai_token_source": getattr(r, "ai_token_source", ""),
+        "ai_latency_ms": getattr(r, "ai_latency_ms", 0),
+        "ai_class": getattr(r, "ai_class", ""),
+        "ai_confidence_ai": getattr(r, "ai_confidence_ai", 0),
+        "ai_reason_code_ai": getattr(r, "ai_reason_code_ai", ""),
+        "ai_explanation_short": getattr(r, "ai_explanation_short", ""),
+        "retry_recommended": getattr(r, "retry_recommended", False),
     }
 
 
@@ -156,6 +210,26 @@ def _build_summary_metrics(
         "ai_calls_used": summary.ai_calls_used,
         "ai_calls_skipped": summary.ai_calls_skipped,
         "ai_errors": summary.ai_errors,
+        "ai_skipped_budget_exhausted_count": getattr(summary, "ai_skipped_budget_exhausted_count", 0),
+        "needs_ai_count": getattr(summary, "needs_ai_count", 0),
+        "retry_recommended_count": getattr(summary, "retry_recommended_count", 0),
+        "ai_prompt_tokens_total": getattr(summary, "ai_prompt_tokens_total", 0),
+        "ai_completion_tokens_total": getattr(summary, "ai_completion_tokens_total", 0),
+        "ai_total_tokens": getattr(summary, "ai_total_tokens_sum", 0),
+        "ai_estimated_tokens_raw_total": getattr(summary, "ai_estimated_tokens_raw_total", 0),
+        "ai_estimated_tokens_buffered_total": getattr(summary, "ai_estimated_tokens_buffered_total", 0),
+        "ai_token_estimation_safety_factor": getattr(summary, "ai_token_estimation_safety_factor", 1.4),
+        "ai_model": getattr(summary, "ai_model", ""),
+        "ai_provider": getattr(summary, "ai_provider", ""),
+        # Extraction summary
+        "files_with_extract": summary.files_with_extract,
+        "files_without_extract": summary.files_without_extract,
+        "extraction_success_count": summary.extraction_success_count,
+        "extraction_failed_count": summary.extraction_failed_count,
+        "extraction_no_text_count": summary.extraction_no_text_count,
+        "extraction_tool_missing_count": summary.extraction_tool_missing_count,
+        "extracted_chars_total": summary.extracted_chars_total,
+        "extraction_method_counts": summary.extraction_method_counts,
     }
 
 
@@ -413,6 +487,31 @@ def _build_admin_report_json(
     if not next_actions:
         next_actions.append("Keine besonderen Maßnahmen erforderlich – Lauf war erfolgreich.")
 
+    # Extraction aggregates (AP2)
+    ext_by_type: dict[str, int] = {}
+    ext_by_status: dict[str, int] = {}
+    ext_by_extension: dict[str, int] = {}
+    files_readable = 0
+    files_unreadable = 0
+    text_available_count = 0
+    estimated_ai_chars = 0
+    for r in results:
+        et = getattr(r, "extractor_type", "")
+        es = getattr(r, "extraction_status", "")
+        if et:
+            ext_by_type[et] = ext_by_type.get(et, 0) + 1
+        if es:
+            ext_by_status[es] = ext_by_status.get(es, 0) + 1
+        if getattr(r, "text_available", False):
+            text_available_count += 1
+            estimated_ai_chars += getattr(r, "text_chars_for_ai", 0)
+        if getattr(r, "readable", "true") == "true":
+            files_readable += 1
+        else:
+            files_unreadable += 1
+        rext = r.extension or "(none)"
+        ext_by_extension[rext] = ext_by_extension.get(rext, 0) + 1
+
     report: dict[str, Any] = {
         "report_type": "admin-report",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -423,6 +522,8 @@ def _build_admin_report_json(
             "mode": summary.mode,
             "dry_run": summary.dry_run,
             "force": getattr(summary, "force", False),
+            "prefix": summary.prefix,
+            "max_files": summary.max_files,
             "started_at": summary.started_at,
             "finished_at": summary.finished_at,
             "duration_seconds": summary.duration_seconds,
@@ -433,6 +534,13 @@ def _build_admin_report_json(
             "report_container": summary.report_container,
             "prefix": summary.prefix,
         },
+        "security": {
+            "raw_text_persisted": False,
+            "dashboard_read_only": True,
+            "scan_writes_disabled": True,
+            "dry_run_writes_disabled": True,
+            "secrets_detected_in_reports": False,
+        },
         "safety": {
             "writes_enabled": not summary.dry_run,
             "ai_enabled": summary.enable_ai,
@@ -440,6 +548,16 @@ def _build_admin_report_json(
             "ai_max_calls_per_run": summary.ai_max_calls_per_run,
             "force": getattr(summary, "force", False),
             "max_files": summary.max_files,
+        },
+        "extraction": {
+            "files_seen": summary.files_seen,
+            "files_processed": summary.files_processed,
+            "files_readable": getattr(summary, "files_readable", files_readable),
+            "files_unreadable": getattr(summary, "files_unreadable", files_unreadable),
+            "text_available_count": getattr(summary, "text_available_count", text_available_count),
+            "by_extractor_type": ext_by_type,
+            "by_extraction_status": ext_by_status,
+            "by_extension": ext_by_extension,
         },
         "metrics": {
             "files_seen": summary.files_seen,
@@ -465,6 +583,42 @@ def _build_admin_report_json(
             "ai_disabled_total": ai_disabled_total,
             "needs_ai_total": needs_ai_total,
             "top_extensions": [{"ext": e, "count": c} for e, c in top_extensions],
+        },
+        "classification_readiness": {
+            "ai_candidates": summary.ai_candidates,
+            "unknown_count": unknown_total,
+            "low_confidence_count": low_conf_total,
+            "estimated_ai_input_chars": getattr(summary, "estimated_ai_input_chars", estimated_ai_chars),
+            "estimated_ai_calls": summary.ai_candidates,
+        },
+        "ai": {
+            "enable_ai": summary.enable_ai,
+            "provider": summary.ai_provider,
+            "model": getattr(summary, "ai_model", ""),
+            "prompt_version": getattr(summary, "ai_prompt_version", ""),
+            "calls_used": summary.ai_calls_used,
+            "calls_skipped": summary.ai_calls_skipped,
+            "errors": summary.ai_errors,
+            "budget_exhausted": (
+                summary.ai_calls_used >= summary.ai_max_calls_per_run
+                if summary.ai_max_calls_per_run > 0 else False
+            ),
+            "dry_run": summary.dry_run,
+            "write_tags": not summary.dry_run,
+            "note": "Dry Run - keine Tags geschrieben" if summary.dry_run else "Tags geschrieben wenn AI_WRITE_TAGS=true",
+            "prompt_tokens_total": getattr(summary, "ai_prompt_tokens_total", 0),
+            "completion_tokens_total": getattr(summary, "ai_completion_tokens_total", 0),
+            "total_tokens": getattr(summary, "ai_total_tokens_sum", 0),
+            "estimated_tokens_total": getattr(summary, "ai_estimated_tokens_total", 0),
+            "latency_ms_avg": getattr(summary, "ai_latency_ms_avg", 0),
+            "latency_ms_max": getattr(summary, "ai_latency_ms_max", 0),
+            "token_source_breakdown": getattr(summary, "ai_token_source_breakdown", ""),
+            "tokens_per_file_avg": round(
+                getattr(summary, "ai_total_tokens_sum", 0) / max(summary.ai_calls_used, 1), 1
+            ) if summary.ai_calls_used > 0 else 0,
+            "success_rate_pct": round(
+                (summary.ai_calls_used - summary.ai_errors) / max(summary.ai_calls_used, 1) * 100, 1
+            ) if summary.ai_calls_used > 0 else 0,
         },
         "errors_summary": error_summary,
         "risk_assessment": risks,
@@ -618,6 +772,24 @@ def _build_admin_report_pdf(
     ]
     story.append(_pdf_table(az_data))
     story.append(Spacer(1, 0.3 * cm))
+
+    # AI Section
+    if summary.enable_ai:
+        story.append(Paragraph("KI-Analyse", styles["Heading2"]))
+        ai_data = [
+            ["Provider", summary.ai_provider],
+            ["Modell", getattr(summary, "ai_model", "-")],
+            ["Promptversion", getattr(summary, "ai_prompt_version", "-")],
+            ["Modus", "Dry Run - keine Tags" if summary.dry_run else "Live"],
+            ["AI Calls", str(summary.ai_calls_used)],
+            ["AI Fehler", str(summary.ai_errors)],
+            ["Prompt-Tokens gesamt", str(getattr(summary, "ai_prompt_tokens_total", 0))],
+            ["Completion-Tokens gesamt", str(getattr(summary, "ai_completion_tokens_total", 0))],
+            ["Total Tokens", str(getattr(summary, "ai_total_tokens_sum", 0))],
+            ["Latenz avg (ms)", str(round(getattr(summary, "ai_latency_ms_avg", 0), 1))],
+        ]
+        story.append(_pdf_table(ai_data))
+        story.append(Spacer(1, 0.3 * cm))
 
     # Key Metrics
     story.append(Paragraph("Kennzahlen", styles["Heading2"]))

@@ -377,6 +377,62 @@ class TestRunSummaryToDict:
         assert d["ai_provider"] == "none"
         assert d["ai_candidates"] == 0
 
+    def test_new_retry_fields_present(self):
+        """needs_ai_count, retry_recommended_count, budget_exhausted_count in to_dict."""
+        from app.models import RunSummary
+        s = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            ai_skipped_budget_exhausted_count=7,
+            needs_ai_count=7,
+            retry_recommended_count=7,
+        )
+        d = s.to_dict()
+        assert d["ai_skipped_budget_exhausted_count"] == 7
+        assert d["needs_ai_count"] == 7
+        assert d["retry_recommended_count"] == 7
+
+    def test_new_token_fields_present(self):
+        """ai_estimated_tokens_raw_total, buffered, safety_factor in to_dict."""
+        from app.models import RunSummary
+        s = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            ai_estimated_tokens_raw_total=100,
+            ai_estimated_tokens_buffered_total=140,
+            ai_token_estimation_safety_factor=1.4,
+        )
+        d = s.to_dict()
+        assert d["ai_estimated_tokens_raw_total"] == 100
+        assert d["ai_estimated_tokens_buffered_total"] == 140
+        assert d["ai_token_estimation_safety_factor"] == 1.4
+
+
+class TestSummaryMetricsNewFields:
+    def test_retry_recommended_count_in_metrics(self):
+        from app.models import RunSummary
+        s = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            ai_skipped_budget_exhausted_count=3,
+            needs_ai_count=3,
+            retry_recommended_count=3,
+            ai_estimated_tokens_raw_total=200,
+            ai_estimated_tokens_buffered_total=280,
+            ai_token_estimation_safety_factor=1.4,
+        )
+        metrics = _build_summary_metrics(s, [])
+        assert metrics["ai_skipped_budget_exhausted_count"] == 3
+        assert metrics["needs_ai_count"] == 3
+        assert metrics["retry_recommended_count"] == 3
+        assert metrics["ai_estimated_tokens_raw_total"] == 200
+        assert metrics["ai_estimated_tokens_buffered_total"] == 280
+        assert metrics["ai_token_estimation_safety_factor"] == 1.4
+
+    def test_details_csv_has_retry_recommended_column(self):
+        writer = ReportWriter(_RUN_ID)
+        summary = _make_summary()
+        reports = writer.build_all_reports(summary, [_make_result()], [])
+        header = reports["classification-details.csv"].decode("utf-8").split("\n")[0]
+        assert "retry_recommended" in header
+
 
 # ---------------------------------------------------------------------------
 # Admin report tests

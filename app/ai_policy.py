@@ -1,10 +1,10 @@
-"""AI call policy – decides when AI Foundry should be called.
+"""AI call policy â€“ decides when AI Foundry should be called.
 
 Conservative policy (default):
   Only call AI when rules produce uncertain results (unknown or low confidence).
   Saves tokens by letting rules handle everything they can classify reliably.
 
-No Azure, no I/O – pure logic; fully unit-testable.
+No Azure, no I/O â€“ pure logic; fully unit-testable.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from app.config import Config
 
 # ---------------------------------------------------------------------------
-# Classes where rule confidence is sufficient – AI adds no value
+# Classes where rule confidence is sufficient â€“ AI adds no value
 # ---------------------------------------------------------------------------
 # key = class_label, value = minimum rule confidence that blocks AI
 _RULE_SUFFICIENT: dict[str, int] = {
@@ -25,7 +25,7 @@ _RULE_SUFFICIENT: dict[str, int] = {
     "hr":        80,
     "finance":   80,
     "contract":  75,
-    "technical": 70,   # structural/config files – content analysis doesn't help
+    "technical": 70,   # structural/config files â€“ content analysis doesn't help
 }
 
 # Extensions for which content-based analysis is meaningless in v0
@@ -59,7 +59,7 @@ def should_call_ai(
 
     Returns a PolicyDecision with should_call=True only when:
       - AI is enabled and provider is set
-      - Mode is classify and not dry_run
+      - Mode is classify (dry_run allowed: tags controlled by worker)
       - Rule result is uncertain (unknown or confidence below threshold)
       - Budget has not been exhausted
       - Extension is not blocked
@@ -79,11 +79,7 @@ def should_call_ai(
     if mode != "classify":
         return PolicyDecision(False, "wrong_mode",
                               is_ai_candidate=candidate, candidate_reason=cand_reason)
-    if dry_run:
-        return PolicyDecision(False, "dry_run",
-                              is_ai_candidate=candidate, candidate_reason=cand_reason)
-
-    # Not a candidate → no AI
+    # Not a candidate â†’ no AI
     if not candidate:
         return PolicyDecision(False, f"rule_sufficient:{rule_class}:{rule_confidence}",
                               is_ai_candidate=False)

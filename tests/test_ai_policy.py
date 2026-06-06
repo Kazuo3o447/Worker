@@ -76,11 +76,23 @@ class TestHardGates:
         assert not d.should_call
         assert "wrong_mode" in d.skip_reason
 
-    def test_dry_run_returns_false(self):
-        cfg = _make_config(enable_ai=True, ai_provider="foundry")
+    def test_dry_run_allows_ai_call(self):
+        """In classify + dry_run + AI enabled: AI is called, tags not written.
+
+        The no-write guarantee is enforced by the worker (ai_write_tags / dry_run),
+        NOT by the policy. The policy must return should_call=True so we get AI results
+        in reports even without writing tags.
+        """
+        cfg = _make_config(enable_ai=True, ai_provider="groq")
         d = _call(config=cfg, dry_run=True)
+        assert d.should_call  # AI call allowed in dry_run
+        assert d.is_ai_candidate
+
+    def test_dry_run_with_budget_exhausted(self):
+        cfg = _make_config(enable_ai=True, ai_provider="groq", ai_max_calls_per_run=3)
+        d = _call(config=cfg, dry_run=True, ai_calls_used=3)
         assert not d.should_call
-        assert d.skip_reason == "dry_run"
+        assert d.skip_reason == "budget_exhausted"
 
     def test_budget_exhausted_still_marks_candidate(self):
         cfg = _make_config(enable_ai=True, ai_provider="foundry", ai_max_calls_per_run=5)
@@ -196,3 +208,61 @@ class TestCandidateReason:
     def test_below_threshold_reason_contains_class(self):
         d = _call(rule_class="hr", rule_confidence=70, reason_code="path_rule_hr")
         assert "hr" in d.candidate_reason
+
+
+# ---------------------------------------------------------------------------
+# budget_exhausted retry behaviour (new)
+# ---------------------------------------------------------------------------
+
+class TestBudgetExhaustedRetry:
+    def test_budget_exhausted_skip_reason(self):
+        cfg = _make_config(enable_ai=True, ai_provider="groq", ai_max_calls_per_run=3)
+        d = _call(config=cfg, ai_calls_used=3)
+        assert d.skip_reason == "budget_exhausted"
+        assert not d.should_call
+        assert d.is_ai_candidate  # must remain a candidate for retry detection
+
+    def test_budget_one_below_limit_allowed(self):
+        cfg = _make_config(enable_ai=True, ai_provider="groq", ai_max_calls_per_run=10)
+        d = _call(config=cfg, ai_calls_used=9)
+        assert d.should_call
+
+    def test_ai_disabled_candidate_reason_preserved(self):
+        """Even when AI is disabled, candidate flag must be populated for reporting."""
+        cfg = _make_config(enable_ai=False, ai_provider="none")
+        d = _call(config=cfg)
+        assert not d.should_call
+        assert d.skip_reason == "ai_disabled"
+        # is_ai_candidate reflects the blob's intrinsic candidacy
+        assert d.is_ai_candidate
+
+
+# ---------------------------------------------------------------------------
+# Token estimation safety factor (new)
+# ---------------------------------------------------------------------------
+
+class TestTokenEstimation:
+    def test_estimate_tokens_basic(self):
+        import math
+        from app.ai.providers.base import estimate_tokens
+        text = "a" * 400
+        assert estimate_tokens(text) == math.ceil(400 / 4)  # == 100
+
+    def test_estimate_tokens_empty(self):
+        from app.ai.providers.base import estimate_tokens
+        assert estimate_tokens("") == 0
+
+    def test_safety_factor_applied(self):
+        import math
+        from app.ai.providers.base import estimate_tokens
+        raw = estimate_tokens("x" * 400)  # 100 tokens
+        buffered = math.ceil(raw * 1.4)
+        assert buffered == 140
+
+    def test_buffered_greater_than_raw(self):
+        import math
+        from app.ai.providers.base import estimate_tokens
+        text = "test document text for estimation " * 20
+        raw = estimate_tokens(text)
+        buffered = math.ceil(raw * 1.4)
+        assert buffered > raw

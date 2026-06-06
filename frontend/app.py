@@ -1474,6 +1474,64 @@ def page_file_types(run_id: str) -> None:
                          if c in details_df.columns]
             comp.show_dataframe(details_df[show_cols] if show_cols else details_df, height=480)
 
+    # Tab 3: Extraktion (only shown when extraction data is present)
+    extraction_cols = {"extractor_type", "extraction_status", "text_available"}
+    has_extraction = not details_df.empty and extraction_cols.issubset(set(details_df.columns))
+    if has_extraction:
+        st.divider()
+        st.subheader("Extraktionsphase")
+        admin = _admin_report(run_id)
+        ext_section = admin.get("extraction", {})
+
+        col1, col2, col3, col4 = st.columns(4)
+        readable_count = int((details_df["readable"] == "true").sum()) if "readable" in details_df.columns else 0
+        unreadable_count = int((details_df["readable"] != "true").sum()) if "readable" in details_df.columns else 0
+        text_avail = int(details_df["text_available"].astype(str).str.lower().eq("true").sum()) \
+            if "text_available" in details_df.columns else 0
+        ai_chars = int(details_df["text_chars_for_ai"].fillna(0).sum()) \
+            if "text_chars_for_ai" in details_df.columns else 0
+        col1.metric("Lesbar", readable_count)
+        col2.metric("Nicht lesbar", unreadable_count)
+        col3.metric("Text extrahiert", text_avail)
+        col4.metric("AI-Zeichen (geschätzt)", f"{ai_chars:,}")
+
+        ecol1, ecol2 = st.columns(2)
+        with ecol1:
+            if "extractor_type" in details_df.columns:
+                st.markdown("**Extractor-Typ**")
+                et_counts = details_df["extractor_type"].replace("", "none").value_counts().reset_index()
+                et_counts.columns = ["Extractor", "Anzahl"]
+                comp.show_dataframe(et_counts, height=200)
+        with ecol2:
+            if "extraction_status" in details_df.columns:
+                st.markdown("**Extraktions-Status**")
+                es_counts = details_df["extraction_status"].replace("", "none").value_counts().reset_index()
+                es_counts.columns = ["Status", "Anzahl"]
+                comp.show_dataframe(es_counts, height=200)
+
+        # Extension breakdown with extraction stats
+        if "extension" in details_df.columns and "text_available" in details_df.columns:
+            ext_agg: dict = {}
+            for _, row in details_df.iterrows():
+                ext = row.get("extension", "(none)") or "(none)"
+                if ext not in ext_agg:
+                    ext_agg[ext] = {"total": 0, "text_available": 0, "chars": 0}
+                ext_agg[ext]["total"] += 1
+                if str(row.get("text_available", "false")).lower() == "true":
+                    ext_agg[ext]["text_available"] += 1
+                ext_agg[ext]["chars"] += int(row.get("text_chars_for_ai", 0) or 0)
+            ext_agg_df = pd.DataFrame([
+                {
+                    "Endung": k,
+                    "Dateien": v["total"],
+                    "Text verfügbar": v["text_available"],
+                    "AI-Zeichen": v["chars"],
+                }
+                for k, v in sorted(ext_agg.items(), key=lambda x: -x[1]["total"])
+            ])
+            st.markdown("**Extraktion nach Dateiendung**")
+            comp.show_dataframe(ext_agg_df, height=300)
+
 
 # ---------------------------------------------------------------------------
 # 7. Fehler & Risiken

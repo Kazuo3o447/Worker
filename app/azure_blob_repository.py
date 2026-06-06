@@ -49,8 +49,13 @@ class AzureBlobRepository:
             return BlobServiceClient.from_connection_string(cs)
 
         if mode == "device_code":
-            from azure.identity import DeviceCodeCredential  # noqa: PLC0415
-            credential = DeviceCodeCredential()
+            from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions  # noqa: PLC0415
+            credential = DeviceCodeCredential(
+                cache_persistence_options=TokenCachePersistenceOptions(
+                    name="andre3000",
+                    allow_unencrypted_storage=True,  # required on Linux (Docker)
+                )
+            )
         else:
             credential = DefaultAzureCredential()
 
@@ -100,6 +105,35 @@ class AzureBlobRepository:
                 existing_tags=tags,
                 existing_status_before=tags.get("status", ""),
             )
+
+    # ------------------------------------------------------------------
+    # Blob content download (worker – extract mode)
+    # ------------------------------------------------------------------
+
+    def download_blob_content(
+        self,
+        blob_name: str,
+        max_bytes: int = 262144,  # 256 KB default
+    ) -> tuple[bytes, str]:
+        """Download up to *max_bytes* from a source blob.
+
+        Returns ``(content_bytes, error_message)``.
+        On error, content_bytes is empty and error_message is non-empty.
+
+        Security: content bytes MUST NOT be persisted by callers.
+        They are passed to extractors for in-memory analysis only.
+        """
+        try:
+            bc = self._client.get_blob_client(
+                container=self.config.source_container, blob=blob_name
+            )
+            stream = bc.download_blob(offset=0, length=max_bytes)
+            data: bytes = stream.readall()
+            return data, ""
+        except AzureError as exc:
+            return b"", str(exc)[:500]
+        except Exception as exc:  # noqa: BLE001
+            return b"", str(exc)[:500]
 
     # ------------------------------------------------------------------
     # Tag operations (worker)

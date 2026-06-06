@@ -1,9 +1,9 @@
 # Projektstatus – GEMA Storage Classification Pilot
 
-> **Stand:** 2026-06-05  
+> **Stand:** 2026-06-06  
 > **Worker-Name:** Andre3000  
-> **Phase:** 5 – Admin-Cockpit, Dateityp-Router, Admin-Reports  
-> **Session-Ergebnis:** Admin-Cockpit (10 Seiten), Dateityp-Router, Admin-Report JSON/PDF erweitert · 253 Tests grün ✅
+> **Phase:** 6 – Extraction (antiword/PyMuPDF) + Groq AI Live + needs_ai Retry-Logik  
+> **Session-Ergebnis:** Vollständige End-to-End-Pipeline getestet. 379 Tests grün ✅  
 
 ---
 
@@ -74,18 +74,22 @@ Der GEMA Storage Classification Pilot ist ein **Azure-first Batch-Klassifizierun
 | Datei | Funktion | Status |
 |---|---|---|
 | `main.py` | CLI-Einstiegspunkt; `--mode`, `--max-files`, `--prefix`, `--dry-run`, `--force`, `--enable-ai` | ✅ |
-| `config.py` | 21-Felder-Dataclass aus Umgebungsvariablen; `AZURE_STORAGE_ACCOUNT` | ✅ |
-| `worker.py` | Orchestriert `run_scan` und `run_classify`; zählt nur verarbeitete Blobs für `max_files` | ✅ |
-| `classifier_rules.py` | Pfad-basierte Regeln, kein Content-Download; 6 Regeln + Fallback `unknown` | ✅ |
+| `config.py` | 23-Felder-Dataclass aus Umgebungsvariablen; inkl. `ai_token_estimation_safety_factor`, `pdf_max_pages` | ✅ |
+| `worker.py` | Orchestriert `run_scan` und `run_classify`; zählt nur verarbeitete Blobs für `max_files`; `retry_recommended`-Tracking | ✅ |
+| `classifier_rules.py` | Pfad-basierte Regeln + **needs_ai Retry**: `status=classified + needs_ai=true` → erneut verarbeiten | ✅ |
 | `ai_policy.py` | Konservative Policy: blockiert AI wenn Regel ausreicht; Budget-Check; Extension-Blocklist | ✅ |
-| `ai_foundry_client.py` | Azure AI Foundry Client (derzeit deaktiviert) | ✅ |
-| `models.py` | `BlobRecord`, `RuleResult`, `ClassificationResult` (30 Felder), `RunSummary` (33 Felder) | ✅ |
-| `app/reports.py` | Baut 10 Report-Dateien als `bytes`; admin-report.json (risk_assessment, file_type_distribution, worker_version) + admin-report.pdf | ✅ |
-| `app/file_type_router.py` | Dateityp-Router: route_strategy (text/legacy_office/ocr/vision/archive/binary); ai_allowed; extraction_required | ✅ |
+| `models.py` | `BlobRecord`, `RuleResult`, `ClassificationResult` (35+ Felder), `RunSummary` (40+ Felder inkl. Retry/Token-Felder) | ✅ |
+| `app/reports.py` | Baut 10 Report-Dateien als `bytes`; inkl. `retry_recommended`, Token Raw/Buffered, `needs_ai_count` | ✅ |
+| `app/file_type_router.py` | Dateityp-Router: route_strategy (text/legacy_office/pdf_text/ocr/vision/archive/binary); ai_allowed; extraction_required | ✅ |
 | `app/validation.py` | Validiert 8 Tags (inkl. `needs_ai`) + Metadaten vor jedem Azure-Schreibzugriff | ✅ |
 | `logging_utils.py` | Strukturiertes JSON-Logging; Events nach Azure | ✅ |
-| `azure_blob_repository.py` | Blob-Listing, Tag-Schreiben, Metadata-Schreiben, Report-Upload | ✅ |
-| `azure_storage.py` | Azure SDK Client-Factory | ✅ |
+| `azure_blob_repository.py` | Blob-Listing, Tag-Schreiben, Metadata-Schreiben, Report-Upload; `allow_unencrypted_storage=True` | ✅ |
+| `azure_storage.py` | Azure SDK Client-Factory; Token-Cache mit `msal-extensions` | ✅ |
+| `app/ai/providers/groq_client.py` | Groq-Provider (llama-3.3-70b-versatile); Token-Tracking (raw+provider_usage); Safety Factor | ✅ |
+| `app/ai/providers/base.py` | Provider-Protocol; `estimate_tokens()`; `AiClassificationRequest/Response` | ✅ |
+| `app/extraction/legacy_office.py` | `.docx` (python-docx) + **`.doc` (antiword via subprocess)** | ✅ |
+| `app/extraction/pdf_extractor.py` | **PDF (PyMuPDF/fitz)** in-memory; verschlüsselt-Check; max_pages konfigurierbar | ✅ |
+| `app/extraction/router.py` | Dispatch nach strategy; PDF-Stub ersetzt durch echten Extraktor | ✅ |
 
 ### Dashboard (`frontend/`)
 
@@ -100,14 +104,18 @@ Der GEMA Storage Classification Pilot ist ein **Azure-first Batch-Klassifizierun
 
 | Datei | Tests | Status |
 |---|---|---|
-| `test_classifier_rules.py` | Regellogik, Pfad-Matching, Extension-Erkennung | ✅ |
-| `test_ai_policy.py` | Policy-Entscheidungen, Budget, Blocklist | ✅ |
-| `test_reports.py` | Report-Generierung, CSV-Struktur, JSON-Inhalt | ✅ |
+| `test_classifier_rules.py` | Regellogik, Pfad-Matching, Extension-Erkennung, **needs_ai Retry** | ✅ |
+| `test_ai_policy.py` | Policy-Entscheidungen, Budget, Blocklist, **budget_exhausted Retry**, **Token-Schätzung** | ✅ |
+| `test_reports.py` | Report-Generierung, CSV-Struktur, JSON-Inhalt, **neue Retry/Token-Felder** | ✅ |
 | `test_validation.py` | Tag-Validierung, Metadaten-Validierung | ✅ |
 | `test_untagged_detection.py` | Ungetaggte-Datei-Erkennung | ✅ |
 | `test_file_type_router.py` | Dateityp-Router: route_strategy, ai_allowed, extraction_required, 60 Fälle | ✅ |
+| `test_extraction.py` | antiword (`.doc`), PyMuPDF (`.pdf`), Timeouts, tool_missing | ✅ |
+| `test_extraction_safety.py` | Sicherheitsregeln Extraction (kein shell=True, tempfile cleanup) | ✅ |
+| `test_ai_providers.py` | Groq-Provider Mocks, Schema-Validierung, Token-Felder | ✅ |
+| `test_ai_dryrun.py` | AI in dry_run: Ergebnis in Report, kein Tag-Write | ✅ |
 
-**Gesamt: 253 Tests – alle grün ✅**
+**Gesamt: 379 Tests – alle grün ✅**
 
 ---
 
@@ -131,14 +139,14 @@ Pfad-basiert, kein Content-Download – erste Übereinstimmung gewinnt:
 
 | Tag-Key | Wertebereich |
 |---|---|
-| `status` | `new` \| `classified` \| `error` \| `unreadable` \| `skipped` |
+| `status` | `new` \| `classified` \| `error` \| `unreadable` \| `skipped` \| `pending_ai` |
 | `class` | `br` \| `dsgvo` \| `hr` \| `finance` \| `contract` \| `technical` \| `unknown` \| `unreadable` |
 | `dsgvo` | `true` \| `false` |
 | `archive_candidate` | `true` \| `false` |
 | `confidence` | `0`..`100` |
 | `readable` | `true` \| `false` |
-| `llm_used` | `true` \| `false` |
-| `needs_ai` | `true` \| `false` – gesetzt wenn `class=unknown`, `confidence < threshold`, oder `reason_code=no_rule_match` |
+| `llm_used` | `true` \| `false` – `true` wenn Groq/Foundry verwendet |
+| `needs_ai` | `true` \| `false` – `true` wenn class=unknown oder confidence < threshold. **Bei `needs_ai=true` wird die Datei beim nächsten Lauf erneut verarbeitet (ohne `--force`)** |
 
 Azure Blob Index Tag Limit: 10. Aktuell: 8 Tags.
 
@@ -186,20 +194,41 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 --mode scan --prefix "_root_part000/" --max-files 50
 ```
 - 50 Blobs gesehen (`.doc`-Dateien mit numerischen Namen)
-- 8 Report-Dateien nach Azure hochgeladen
-- Keine Writes an Blobs
+- 8 Report-Dateien nach Azure hochgeladen; keine Writes an Blobs
 
 ### Run 2 – Dry-Run Classify (`20260605T091356Z`)
 ```
 --mode classify --prefix "_root_part000/" --max-files 50 --dry-run
 ```
-- 50 Blobs verarbeitet, alle klassifiziert
-- 100 % `class=unknown`, `confidence=30`, `reason_code=no_rule_match`
+- 50 Blobs verarbeitet, alle `class=unknown`, `confidence=30`
 - `dry_run=true` → 0 Azure-Schreiboperationen an Blobs
-- 8 Reports nach Azure hochgeladen
-- `reports_uploaded=true`
 
-**Erkenntnis:** Alle Dateien in `_root_part000/` haben rein numerische Namen (z. B. `100001_24042013 155126.doc`) → keine Regel trifft → `unknown`. Für echte Klassifizierung wird KI oder Content-Analyse benötigt.
+### Run 3 – Extraction Dry-Run (`20260606T065736Z`)
+```
+--mode classify --prefix "_root_part000/" --max-files 5 --dry-run
+```
+- `extraction_method_counts: antiword:5` bestätigt
+- antiword und PyMuPDF in Docker verfügbar
+
+### Run 4 – Erster Groq AI Write Test (`20260606T070804Z`)
+```
+--mode classify --prefix "_root_part000/" --max-files 10
+```
+- `ai_calls_used=3` (Limit: `AI_MAX_CALLS_PER_RUN=3`)
+- Klassifikationen: **finance×2, contract×1** (conf=90)
+- 7 Dateien `budget_exhausted` → `class=unknown, needs_ai=true, llm_used=false`
+- `extraction_method_counts: antiword:3`; `ai_total_tokens=2532`
+
+### Run 5 – AI Retry Test (`20260606T072012Z`)
+```
+--mode classify --prefix "_root_part000/" --max-files 10
+```
+- Limit erhöht auf `AI_MAX_CALLS_PER_RUN=10`
+- Alle 10 `needs_ai=true`-Dateien wurden erkannt und erneut verarbeitet
+- `ai_calls_used=10`, `ai_calls_skipped=0`, `budget_exhausted=0`
+- `files_unknown=0`, `needs_ai_count=0` nach Retry
+- Klassifikationen: **finance×4, hr×4, contract×2** (conf 80–90)
+- `ai_total_tokens=7972`; `ai_estimated_tokens_buffered=8295` (Safety Factor 1.4 hält)
 
 ---
 
@@ -229,63 +258,57 @@ Pfad in Azure: `reports/pilot-v0.1/<run_id>/`
 
 ---
 
-## 11. Behobene Bugs (diese Session)
+## 11. Behobene Bugs – Phase 6 (2026-06-06)
+
+| # | Datei | Problem | Fix |
+|---|---|---|---|
+| 1 | `azure_blob_repository.py` + `azure_storage.py` | Docker: `libsecret`-Fehler → 9× Login pro Session | `allow_unencrypted_storage=True` in `TokenCachePersistenceOptions`; `msal-extensions>=1.0.0` |
+| 2 | `Dockerfile` | `/nonexistent` Permission Error (kein Home-Dir für `worker`-User) | `--home /home/worker`, `mkdir -p`, `ENV HOME=/home/worker` |
+| 3 | `app/extraction/legacy_office.py` | `.doc`-Dateien hatten keinen Extraktor → `ai_calls_used=0` immer | antiword via `subprocess.run` (kein `shell=True`); tempfile in `finally` gelöscht |
+| 4 | `app/extraction/` | PDF hatte Stub `not_implemented` | `pdf_extractor.py` mit PyMuPDF/fitz (in-memory) |
+| 5 | `app/classifier_rules.py` | `status=classified + needs_ai=true` → silent skip → KI nie nachgeholt | Neue Prüfung: `needs_ai=true` erlaubt Retry ohne `--force` |
+| 6 | `app/worker.py` | `needs_ai_val` nach `retry_recommended_val` berechnet → `UnboundLocalError` | Reihenfolge getauscht |
+| 7 | `app/worker.py` | Token-Schätzung ohne Sicherheitspuffer: +36% Abweichung zu echten Tokens | Safety Factor 1.4; neue Felder `ai_estimated_prompt_tokens_raw/buffered` |
+
+## 11b. Behobene Bugs – Phase 1–5 (historisch)
 
 | # | Datei | Problem | Fix |
 |---|---|---|---|
 | 1 | `app/config.py` | Duplicate Phase-2-Config-Klasse | Alte Klasse entfernt |
 | 2 | `app/config.py` | `STORAGE_ACCOUNT` statt `AZURE_STORAGE_ACCOUNT` | Env-Var korrigiert |
-| 3 | `app/worker.py` | `classify_blob` mit 3 statt 1 Argument aufgerufen | Signatur korrigiert |
+| 3 | `app/worker.py` | `classify_blob` mit 3 statt 1 Argument | Signatur korrigiert |
 | 4 | `app/worker.py` | `max_files` zählte alle gesehenen Blobs | Zählt jetzt nur verarbeitete |
-| 5 | `app/worker.py` | Tags `readable`, `llm_used` fehlten | Hinzugefügt (7 Tags total) |
-| 6 | `app/worker.py` | Metadata `original_path`, `model_name`, `processed_at` fehlten | Hinzugefügt |
-| 7 | `app/worker.py` | `rule_class` in AI-Kandidaten-Zeile war post-AI | `rule_class_before_ai` eingefügt |
-| 8 | `app/worker.py` | AI-Fehler setzte nicht `action="error"` | Korrigiert |
-| 9 | `app/models.py` | `RunSummary` hatte 13 Felder zu wenig | Alle 33 Felder ergänzt |
-| 10 | `app/logging_utils.py` | Doppelte `_emit`/`_now_iso`/Helper-Funktionen | Zweite Kopie entfernt |
-| 11 | `.env.example` | `WORKER_VERSION=v0` | `pilot-v0.1` |
-| 12 | `.env.example` | `DEFAULT_PREFIX` leer | `_root_part000/` |
-| 13 | `Dockerfile` + `frontend/Dockerfile` | `mkdir -p local-reports` | Entfernt |
-| 14 | `frontend/report_loader.py` | Veralteter lokaler File-Reader | Datei gelöscht |
-| 15 | `app/logging_utils.py` | `log_run_finished`: `run_id` doppelt übergeben → `TypeError` | Explizites `run_id=` entfernt |
-| 16 | `docker-compose.yml` | `command: streamlit run frontend/app.py` | Zu `app.py` korrigiert |
-| 17 | `frontend/app.py` + `azure_report_repository.py` | `from frontend.config import ...` schlägt im Container fehl | `try/except ModuleNotFoundError` |
-| 18 | `frontend/app.py` | `DeviceCodeCredential` blockiert Streamlit-Script-Runner | Background-Thread + Polling + Device-Code in UI |
+| 5 | `app/worker.py` | Tags `readable`, `llm_used` fehlten | Hinzugefügt |
+| 6 | `app/models.py` | `RunSummary` hatte 13 Felder zu wenig | Alle Felder ergänzt |
+| 7 | `frontend/app.py` | `from frontend.config import ...` schlägt im Container fehl | `try/except ModuleNotFoundError` |
+| 8 | `frontend/app.py` | `DeviceCodeCredential` blockiert Streamlit-Script-Runner | Background-Thread + Polling |
 
 ---
 
 ## 12. Nächste Schritte
 
-### Prio 1 – Content Extraction (direkt umsetzbar)
+### Prio 1 – PDF-Test (sofort umsetzbar)
 ```bash
-# Content Extraction Light: .doc-Inhalte extrahieren → danach KI möglich
-docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10 --dry-run
+docker compose run --rm worker --mode classify --prefix "_root_part000/102129" --max-files 1
 ```
+Die 3 PDFs in `_root_part000/` (`102129.pdf`, `1133248.pdf`, `1235690.pdf`) haben noch `status=NO_STATUS`.
 
-### Prio 2 – AI Dry Run
+### Prio 2 – Größerer Lauf
 ```bash
-# KI Dry Run mit 5 Dateien – kein Azure-Write, KI-Aufrufe gegen Foundry
-docker compose run --rm worker --mode classify --dry-run \
-  --enable-ai --ai-provider foundry --ai-max-calls 5 --max-files 5
+docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 50
 ```
+Bereits klassifizierte Dateien (`needs_ai=false`) werden korrekt übersprungen.
 
-### Prio 3 – Echter Mini-Run
-```bash
-# Echter Mini-Run – schreibt Tags an 10 Blobs (reversibel mit --force)
-docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10
-```
-⚠️ **Dieser Run schreibt** `class=unknown, confidence=30, status=classified` als Blob Index Tags.  
-Reversibel mit erneutem Run + `--force`.
+### Prio 3 – AI_MAX_CALLS_PER_RUN erhöhen
+Für Batch-Klassifizierung: `AI_MAX_CALLS_PER_RUN=20` in `.env` setzen.
 
 ### Mittelfristig
 | Aufgabe | Priorität |
 |---|---|
-| Content Extraction Light implementieren | Hoch |
-| AI-Integration testen (Azure AI Foundry, `--enable-ai`) | Hoch |
-| `route_strategy` in classification-details.csv schreiben | Mittel |
-| Weitere Prefixes / Container scannen | Mittel |
-| Azure Container Apps Deployment (siehe `docs/azure-container-apps-plan.md`) | Mittel |
-| AdminLTE Prototyp evaluieren (nach KI-Integration) | Niedrig |
+| PDF-Test (PyMuPDF live) | Hoch |
+| AI_MAX_CALLS_PER_RUN auf 20–50 erhöhen | Hoch |
+| Azure Container Apps Deployment | Mittel |
+| Dashboard: Retry/needs_ai-Spalten anzeigen | Mittel |
 | CI/CD Pipeline (GitHub Actions) | Niedrig |
 
 ---
@@ -293,26 +316,26 @@ Reversibel mit erneutem Run + `--force`.
 ## 13. Wichtige Befehle
 
 ```bash
-# Verzeichnis wechseln
-cd "c:\Users\g103010\Desktop\Worker\storage-classification-pilot"
-
 # Tests ausführen
 python -m pytest tests/ -q
 
-# Docker Images bauen
-docker compose build
+# Docker Image bauen (nach Code-Änderungen)
+docker compose build worker
 
 # Scan (read-only, kein Azure-Write)
 docker compose run --rm worker --mode scan --prefix "_root_part000/" --max-files 50
 
-# Dry-Run Classify (kein Azure-Write an Blobs, Reports gehen nach Azure)
-docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 50 --dry-run
+# Dry-Run Classify (kein Azure-Write an Blobs)
+docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10 --dry-run
+
+# Echter Classify (schreibt Tags + Metadata)
+docker compose run --rm worker --mode classify --prefix "_root_part000/" --max-files 10
+
+# Gezielter PDF-Test
+docker compose run --rm worker --mode classify --prefix "_root_part000/102129" --max-files 1
 
 # Dashboard starten
-docker compose -f docker-compose.yml --project-directory . up dashboard
-
-# Container-Logs
-docker logs storage-classification-pilot-dashboard-1 -f
+docker compose up dashboard
 ```
 
 ---
@@ -323,29 +346,41 @@ docker logs storage-classification-pilot-dashboard-1 -f
 storage-classification-pilot/
 ├── app/                          # Worker-Logik
 │   ├── main.py                   # CLI-Einstiegspunkt
-│   ├── config.py                 # Umgebungsvariablen → Config Dataclass
-│   ├── worker.py                 # run_scan / run_classify
-│   ├── classifier_rules.py       # Pfad-basierte Regeln
+│   ├── config.py                 # Umgebungsvariablen → Config Dataclass (23 Felder)
+│   ├── worker.py                 # run_scan / run_classify; retry_recommended-Tracking
+│   ├── classifier_rules.py       # Pfad-basierte Regeln + needs_ai Retry
 │   ├── ai_policy.py              # AI-Aufruf-Entscheidung
-│   ├── ai_foundry_client.py      # Azure AI Foundry Client
 │   ├── models.py                 # BlobRecord, RuleResult, ClassificationResult, RunSummary
-│   ├── reports.py                # 8 Report-Dateien bauen
+│   ├── reports.py                # 10 Report-Dateien bauen; retry/token Felder
 │   ├── validation.py             # Tag + Metadata Validierung
 │   ├── logging_utils.py          # Structured JSON Logging
 │   ├── azure_blob_repository.py  # Azure SDK Operationen
-│   └── azure_storage.py          # Client-Factory
+│   ├── azure_storage.py          # Client-Factory; msal-extensions Token-Cache
+│   ├── file_type_router.py       # Dateityp-Router
+│   ├── ai/
+│   │   └── providers/
+│   │       ├── base.py           # AiProvider Protocol; estimate_tokens()
+│   │       ├── groq_client.py    # Groq-Provider (llama-3.3-70b-versatile)
+│   │       └── azure_foundry_client.py  # Azure AI Foundry (konfigurierbar)
+│   └── extraction/
+│       ├── router.py             # Dispatch nach strategy
+│       ├── legacy_office.py      # .docx (python-docx) + .doc (antiword)
+│       ├── pdf_extractor.py      # PDF (PyMuPDF/fitz) in-memory
+│       ├── direct_text.py        # .txt/.csv direkt
+│       ├── safety.py             # Sicherheitsregeln für Extraction
+│       └── models.py             # ExtractionResult Dataclass
 ├── frontend/                     # Streamlit Admin-Cockpit
-│   ├── app.py                    # Hauptdatei, 10 Bereiche (Cockpit…Run Commands)
-│   ├── config.py                 # Frontend-Config
-│   ├── azure_report_repository.py # Read-only Azure Client (6 Methoden)
-│   ├── components.py             # UI-Komponenten
+│   ├── app.py                    # 10 Bereiche
+│   ├── config.py
+│   ├── azure_report_repository.py
+│   ├── components.py
 │   ├── Dockerfile
 │   └── requirements.txt
-├── tests/                        # 253 Tests
-├── docs/                         # 7 Dokumente
-├── Dockerfile                    # Worker Container
-├── docker-compose.yml            # worker + dashboard Services
+├── tests/                        # 379 Tests
+├── docs/                         # Testberichte + Architektur
+├── Dockerfile                    # Worker Container (antiword + PyMuPDF)
+├── docker-compose.yml
 ├── .env                          # Lokale Konfiguration (nicht in Git)
-├── .env.example                  # Vorlage
-└── requirements.txt              # Worker-Abhängigkeiten
+├── .env.example
+└── requirements.txt
 ```

@@ -36,11 +36,19 @@ class Config:
     dashboard_report_source: str     # azure | local
     # AI
     enable_ai: bool
-    ai_provider: str                 # none | foundry
+    ai_provider: str                 # none | groq | foundry
+    ai_model: str                    # e.g. llama-3.3-70b-versatile
+    ai_prompt_version: str           # e.g. v1
     ai_policy_mode: str              # conservative | balanced
     ai_max_calls_per_run: int
     ai_max_chars_per_file: int
+    ai_max_total_chars_per_run: int
+    ai_temperature: float
+    ai_max_output_tokens: int
+    ai_write_tags: bool              # false = never write AI tags (dry-run safe)
     ai_min_confidence_threshold: int
+    pdf_max_pages: int               # max PDF pages to sample per file
+    ai_token_estimation_safety_factor: float  # buffer multiplier for token estimates (e.g. 1.4)
     ai_foundry_endpoint: Optional[str]
     ai_foundry_model_deployment: Optional[str]
     ai_foundry_api_version: Optional[str]
@@ -71,10 +79,18 @@ def load_config() -> Config:
         dashboard_report_source=os.getenv("DASHBOARD_REPORT_SOURCE", "azure"),
         enable_ai=_parse_bool(os.getenv("ENABLE_AI", "false"), default=False),
         ai_provider=os.getenv("AI_PROVIDER", "none").lower(),
+        ai_model=os.getenv("AI_MODEL", "llama-3.3-70b-versatile"),
+        ai_prompt_version=os.getenv("AI_PROMPT_VERSION", "v1"),
         ai_policy_mode=os.getenv("AI_POLICY_MODE", "conservative").lower(),
         ai_max_calls_per_run=int(os.getenv("AI_MAX_CALLS_PER_RUN", "20")),
         ai_max_chars_per_file=int(os.getenv("AI_MAX_CHARS_PER_FILE", "4000")),
+        ai_max_total_chars_per_run=int(os.getenv("AI_MAX_TOTAL_CHARS_PER_RUN", "10000")),
+        ai_temperature=float(os.getenv("AI_TEMPERATURE", "0")),
+        ai_max_output_tokens=int(os.getenv("AI_MAX_OUTPUT_TOKENS", "300")),
+        ai_write_tags=_parse_bool(os.getenv("AI_WRITE_TAGS", "false"), default=False),
         ai_min_confidence_threshold=int(os.getenv("AI_MIN_CONFIDENCE_THRESHOLD", "60")),
+        pdf_max_pages=int(os.getenv("PDF_MAX_PAGES", "3")),
+        ai_token_estimation_safety_factor=float(os.getenv("AI_TOKEN_ESTIMATION_SAFETY_FACTOR", "1.4")),
         ai_foundry_endpoint=os.getenv("AI_FOUNDRY_ENDPOINT") or None,
         ai_foundry_model_deployment=os.getenv("AI_FOUNDRY_MODEL_DEPLOYMENT") or None,
         ai_foundry_api_version=os.getenv("AI_FOUNDRY_API_VERSION") or None,

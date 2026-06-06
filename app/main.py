@@ -44,9 +44,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["scan", "classify"],
+        choices=["scan", "classify", "extract"],
         required=True,
-        help="scan = read-only detection; classify = write tags + upload reports",
+        help="scan = read-only detection; classify = write tags + upload reports; extract = download + extract metrics (no raw text)",
     )
     parser.add_argument("--max-files", type=int, default=None, metavar="N",
                         help="Max blobs per run (default from DEFAULT_MAX_FILES env)")
@@ -60,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-ai", action="store_true", default=False,
                         help="Enable AI classification (overrides ENABLE_AI env)")
     parser.add_argument("--ai-provider", type=str, default=None,
-                        metavar="foundry|none",
+                        metavar="groq|foundry|none",
                         help="AI provider (overrides AI_PROVIDER env)")
     parser.add_argument("--ai-max-calls", type=int, default=None, metavar="N",
                         help="Max AI calls per run (overrides AI_MAX_CALLS_PER_RUN env)")
@@ -100,14 +100,18 @@ def main() -> int:
         log_error(run_id, "Failed to initialise Azure Blob Repository", error=str(exc))
         return 2
 
-    # Optional AI client
-    ai_client = None
-    if config.enable_ai and config.ai_provider == "foundry":
-        from app.ai_foundry_client import AIFoundryClient  # noqa: PLC0415
-        ai_client = AIFoundryClient(config)
-        if not ai_client.available:
-            log_error(run_id, f"AI client unavailable: {ai_client.init_error}")
-            # Non-fatal: continue without AI
+    # Optional AI provider (groq | foundry | none)
+    ai_provider = None
+    if config.enable_ai and config.ai_provider not in ("none", ""):
+        try:
+            from app.ai.providers.base import get_provider  # noqa: PLC0415
+            ai_provider = get_provider(config.ai_provider)
+            if not ai_provider.available:
+                log_error(run_id, f"AI provider '{config.ai_provider}' unavailable: {ai_provider.init_error}")
+                ai_provider = None  # Non-fatal: continue without AI
+        except ValueError as ve:
+            log_error(run_id, f"Unknown AI provider: {ve}")
+            ai_provider = None
 
     max_files = args.max_files if args.max_files is not None else config.default_max_files
     prefix = args.prefix
@@ -122,7 +126,14 @@ def main() -> int:
             run_id=run_id, config=config, repo=repo,
             prefix=prefix, max_files=max_files,
             dry_run=args.dry_run, force=args.force,
-            ai_client=ai_client,
+            ai_provider=ai_provider,
+        )
+    if args.mode == "extract":
+        from app.worker import run_extract  # noqa: PLC0415
+        return run_extract(
+            run_id=run_id, config=config, repo=repo,
+            prefix=prefix, max_files=max_files,
+            dry_run=args.dry_run, force=args.force,
         )
     return 1
 

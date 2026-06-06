@@ -41,7 +41,7 @@ _TECHNICAL_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 # Statuses that can be re-processed without --force
-_RETRY_STATUSES: frozenset[str] = frozenset({"new", "error", ""})
+_RETRY_STATUSES: frozenset[str] = frozenset({"new", "error", "", "pending_ai"})
 
 # Statuses that are considered final (skip without --force)
 _SKIP_STATUSES: frozenset[str] = frozenset({"classified", "skipped", "unreadable"})
@@ -109,6 +109,10 @@ def should_process_blob(
 
     if force:
         return True, f"force=true,status={status}"
+
+    # classified + needs_ai=true → allow AI retry without --force
+    if status == "classified" and existing_tags.get("needs_ai") == "true":
+        return True, "status=classified,needs_ai=true"
 
     if status in _SKIP_STATUSES:
         return False, f"status={status}"
