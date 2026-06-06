@@ -22,7 +22,11 @@ class FrontendConfig:
     default_max_files: int
     enable_ai: bool
     ai_provider: str
+    ai_model: str
+    ai_prompt_version: str
     ai_max_calls_per_run: int
+    pdf_max_pages: int
+    ai_token_estimation_safety_factor: float
     connection_string: str   # optional – emergency access; never shown in UI
 
     @property
@@ -46,6 +50,10 @@ def load_frontend_config() -> FrontendConfig:
         default_max_files=int(os.environ.get("DEFAULT_MAX_FILES", "50")),
         enable_ai=_bool(os.environ.get("ENABLE_AI", "false")),
         ai_provider=os.environ.get("AI_PROVIDER", "none"),
+        ai_model=os.environ.get("AI_MODEL", ""),
+        ai_prompt_version=os.environ.get("AI_PROMPT_VERSION", "v1"),
         ai_max_calls_per_run=int(os.environ.get("AI_MAX_CALLS_PER_RUN", "20")),
+        pdf_max_pages=int(os.environ.get("PDF_MAX_PAGES", "3")),
+        ai_token_estimation_safety_factor=float(os.environ.get("AI_TOKEN_ESTIMATION_SAFETY_FACTOR", "1.5")),
         connection_string=os.environ.get("AZURE_STORAGE_CONNECTION_STRING", ""),
     )

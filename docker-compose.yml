@@ -25,7 +25,9 @@ services:
     env_file: .env
     ports:
       - "8501:8501"
-    # Kein Volume local-reports – Dashboard liest direkt aus Azure
+    volumes:
+      # Persist Azure token cache across container rebuilds – avoids repeated device-code login
+      - dashboard-token-cache:/home/dashboard
     restart: unless-stopped
     command: >
       streamlit run app.py
@@ -33,3 +35,7 @@ services:
       --server.port=8501
       --server.headless=true
       --browser.gatherUsageStats=false
+
+volumes:
+  # Named volume so the Azure MSAL token cache survives docker compose build/up
+  dashboard-token-cache:

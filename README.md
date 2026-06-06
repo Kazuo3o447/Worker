@@ -165,7 +165,7 @@ python -m app.main --mode {scan|classify}
   [--dry-run]        Tags/Metadata NICHT schreiben; Reports trotzdem hochladen
   [--prefix PATH]    Nur Blobs mit diesem Prefix verarbeiten
   [--enable-ai]      KI-Klassifizierung aktivieren (überschreibt ENABLE_AI=false)
-  [--ai-provider]    KI-Provider: none | foundry
+  [--ai-provider]    KI-Provider: none | groq | foundry
   [--ai-max-calls N] Max. KI-Aufrufe pro Lauf
 ```
 
@@ -283,10 +283,13 @@ Die Managed Identity des Workers braucht auf `stgemaclasspilot001`:
 
 ## 17 · Nächste Ausbaustufen
 
-- [ ] Office/PDF-Textextraktion (nur Metadaten, kein vollständiger Download)
-- [ ] LLM-Klassifikation (Azure OpenAI) für `class=unknown` oder `confidence < 60`
+- [x] Office/PDF-Textextraktion (antiword für .doc, PyMuPDF für .pdf)
+- [x] LLM-Klassifikation (Groq/llama-3.3-70b-versatile) für `class=unknown` oder `confidence < 60`
+- [x] Worker als unabhängiger Subprocess (Frontend-Absturz beendet nicht den Lauf)
+- [x] AuthenticationRecord-Persistenz (kein erneutes Device-Code-Login nach Restart)
+- [x] Timezone-korrekte Anzeige (UTC → Europe/Berlin)
 - [ ] Lifecycle-Regel (automatisches Archivieren/Löschen nach Klassifikation)
 - [ ] Review-Workflow (Fachbereich bestätigt Klassifikation)
 - [ ] Azure Container Apps Job zeitgesteuert (täglich)
-- [ ] Dashboard-Zugriff auf Azure `reports`-Container (`ENABLE_AZURE_REPORT_BROWSER=true`)
+- [ ] CI/CD Pipeline (GitHub Actions)
 

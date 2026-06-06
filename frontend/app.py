@@ -4,18 +4,41 @@
               Dateien & Dateitypen | Fehler & Risiken | Reports & Exporte |
               Konfiguration | Run Commands
 
-Read-only: keine Blob-Schreiboperationen, keine AI-Aufrufe, keine Worker-Starts.
 Starten: streamlit run frontend/app.py  (oder docker compose up dashboard)
 """
 
 from __future__ import annotations
 
 import json
+import logging as _logging
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback as _traceback
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_TZ_LOCAL = ZoneInfo("Europe/Berlin")
+
+
+def _fmt_ts(ts: "str | None", *, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Convert a UTC ISO timestamp string to Europe/Berlin local time for display."""
+    if not ts or ts == "-":
+        return "-"
+    try:
+        dt = datetime.fromisoformat(str(ts))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_TZ_LOCAL).strftime(fmt)
+    except (ValueError, TypeError):
+        return str(ts)[:19].replace("T", " ")
+
 
 # Ensure the parent directory (storage-classification-pilot) is in sys.path
 _frontend_dir = pathlib.Path(__file__).resolve().parent
@@ -26,6 +49,91 @@ import pandas as pd
 import streamlit as st
 
 _DEVICE_CODE_MSG_FILE = pathlib.Path(tempfile.gettempdir()) / "azure_device_code.txt"
+# Alias used by the persistent-state block below (avoids bare `sys.modules` lint warnings)
+_sys_modules = sys.modules
+
+# ---------------------------------------------------------------------------
+# App-Log Buffer  (thread-safe, shared across all Streamlit sessions)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _LogEntry:
+    ts: str           # HH:MM:SS.ms
+    level: str        # DEBUG / INFO / WARNING / ERROR / CRITICAL
+    component: str    # logger name or "app"
+    message: str
+    detail: str = field(default="")   # traceback or extra context
+
+
+# Streamlit re-executes app.py in a FRESH namespace on every user interaction.
+# globals() is therefore always empty at the start of each rerun – any plain
+# module-level variable would be reset.  We work around this by storing the
+# mutable shared objects in sys.modules (which is never cleared between reruns)
+# and then binding local names to those same objects.
+_PERSIST_KEY = "__andre3000_state__"
+if _PERSIST_KEY not in _sys_modules:
+    import types as _types
+    _ps = _types.ModuleType(_PERSIST_KEY)
+    _ps.LOG_BUFFER = deque(maxlen=2000)       # type: ignore[attr-defined]
+    _ps.LOG_BUFFER_LOCK = threading.Lock()    # type: ignore[attr-defined]
+    _ps.ACTIVE_RUNS: dict = {}                # type: ignore[attr-defined]
+    _ps.ACTIVE_RUNS_LOCK = threading.Lock()   # type: ignore[attr-defined]
+    _sys_modules[_PERSIST_KEY] = _ps
+_ps = _sys_modules[_PERSIST_KEY]
+# Bind module-level names to the SAME persistent objects every rerun.
+_LOG_BUFFER: "deque[_LogEntry]" = _ps.LOG_BUFFER
+_LOG_BUFFER_LOCK: threading.Lock = _ps.LOG_BUFFER_LOCK
+
+
+class _AppLogHandler(_logging.Handler):
+    """Captures Python logging records into the shared in-memory buffer."""
+
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            detail = ""
+            if record.exc_info and record.exc_info[0] is not None:
+                detail = "".join(_traceback.format_exception(*record.exc_info))
+            entry = _LogEntry(
+                ts=datetime.fromtimestamp(record.created).strftime("%H:%M:%S.%f")[:-3],
+                level=record.levelname,
+                component=record.name,
+                message=record.getMessage(),
+                detail=detail,
+            )
+            with _LOG_BUFFER_LOCK:
+                _LOG_BUFFER.append(entry)
+        except Exception:  # noqa: BLE001
+            pass  # never let the handler crash the app
+
+
+def _install_log_handler() -> None:
+    root = _logging.getLogger()
+    for h in root.handlers:
+        if isinstance(h, _AppLogHandler):
+            return
+    handler = _AppLogHandler()
+    handler.setLevel(_logging.DEBUG)
+    root.addHandler(handler)
+    # Ensure the root logger passes at least INFO so Azure SDK warnings appear
+    if root.level == _logging.NOTSET or root.level > _logging.INFO:
+        root.setLevel(_logging.INFO)
+
+
+_install_log_handler()
+
+
+def _app_log(level: str, component: str, message: str, detail: str = "") -> None:
+    """Write a frontend app event directly into the log buffer."""
+    entry = _LogEntry(
+        ts=datetime.now().strftime("%H:%M:%S.%f")[:-3],
+        level=level,
+        component=component,
+        message=message,
+        detail=detail,
+    )
+    with _LOG_BUFFER_LOCK:
+        _LOG_BUFFER.append(entry)
+
 
 # ---------------------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -73,9 +181,15 @@ def _ensure_auth_thread() -> None:
             ok, err = r.is_available()
             state["ok"] = ok
             state["err"] = err
+            if ok:
+                _app_log("INFO", "auth", "Azure Blob Storage Verbindung erfolgreich hergestellt.")
+            else:
+                _app_log("ERROR", "auth", f"Azure Verbindung fehlgeschlagen: {err}")
         except Exception as exc:  # noqa: BLE001
             state["ok"] = False
             state["err"] = str(exc)
+            _app_log("ERROR", "auth", f"Azure Auth Exception: {exc}",
+                     detail="".join(_traceback.format_exc()))
         finally:
             _DEVICE_CODE_MSG_FILE.unlink(missing_ok=True)
             state["event"].set()
@@ -148,15 +262,18 @@ PAGES = [
     "Dateien & Dateitypen",
     "Fehler & Risiken",
     "Reports & Exporte",
+    "Observability",
     "Konfiguration",
     "Run Commands",
+    "App Logs",
 ]
 
 page = st.sidebar.radio("Navigation", PAGES, label_visibility="collapsed")
 
 # Run selector (relevant for detail pages)
 RUN_PAGES = {"Run Detail", "Klassifizierung", "KI Readiness",
-             "Dateien & Dateitypen", "Fehler & Risiken", "Reports & Exporte"}
+             "Dateien & Dateitypen", "Fehler & Risiken", "Reports & Exporte",
+             "Observability"}
 
 if page in RUN_PAGES:
     st.sidebar.markdown("---")
@@ -218,7 +335,15 @@ def _health(summary: dict) -> str:
     """Return 'red' | 'yellow' | 'green'."""
     if int(summary.get("files_error", 0)) > 0:
         return "red"
-    if int(summary.get("files_unknown", 0)) > 0 or int(summary.get("ai_candidates", 0)) > 0:
+    if int(summary.get("ai_errors", 0)) > 0:
+        return "red"
+    if (
+        int(summary.get("needs_ai_count", 0)) > 0
+        or int(summary.get("retry_recommended_count", 0)) > 0
+        or int(summary.get("ai_skipped_budget_exhausted_count", 0)) > 0
+        or int(summary.get("files_unknown", 0)) > 0
+        or int(summary.get("ai_candidates", 0)) > 0
+    ):
         return "yellow"
     return "green"
 
@@ -240,6 +365,15 @@ def _next_action(summary: dict, admin: dict) -> str:
     errors = int(summary.get("files_error", 0))
     if errors > 0:
         return f"Fehler prüfen: {errors} Dateien konnten nicht verarbeitet werden"
+    needs_ai = int(summary.get("needs_ai_count", 0))
+    retry = int(summary.get("retry_recommended_count", 0))
+    budget_ex = int(summary.get("ai_skipped_budget_exhausted_count", 0))
+    if needs_ai > 0:
+        return f"needs_ai Retry: {needs_ai} Dateien warten auf KI – max-files=10 Retry"
+    if retry > 0:
+        return f"retry_recommended: {retry} Dateien – erneuter Lauf ohne --force"
+    if budget_ex > 0:
+        return f"budget_exhausted: {budget_ex} Dateien – AI_MAX_CALLS_PER_RUN erhöhen"
     unknown = int(summary.get("files_unknown", 0))
     ai_cand = int(summary.get("ai_candidates", 0))
     if unknown > 0 and not summary.get("enable_ai", False):
@@ -360,7 +494,7 @@ def page_overview(run_id: str) -> None:
     comp.metric_row({
         "Mode": summary.get("mode", "-"),
         "Worker Version": summary.get("worker_version", "-"),
-        "Started": str(summary.get("started_at", "-"))[:19].replace("T", " "),
+        "Started": _fmt_ts(summary.get("started_at")),
         "Dauer (s)": f"{summary.get('duration_seconds', 0):.1f}",
     })
     st.divider()
@@ -710,87 +844,257 @@ def page_config(_run_id: str) -> None:
 # Page: Run Commands (Command Builder)
 # ---------------------------------------------------------------------------
 
+_ACTIVE_RUNS: dict[str, dict] = _ps.ACTIVE_RUNS
+_ACTIVE_RUNS_LOCK: threading.Lock = _ps.ACTIVE_RUNS_LOCK
+
+
+def _worker_thread(args: list[str], session_key: str) -> None:
+    """Run the worker as a subprocess so it lives independently of Streamlit.
+
+    Uses python -m app.main in the same container (which has antiword installed).
+    Auth works via the persisted AuthenticationRecord written by the dashboard
+    after its first successful device-code login.
+    """
+    proj_dir = str(pathlib.Path(__file__).resolve().parent.parent)
+    cmd = [sys.executable, "-m", "app.main"] + args
+    env = os.environ.copy()
+    _app_log("INFO", "worker", f"Worker-Subprocess gestartet: {' '.join(args)}")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=proj_dir,
+            env=env,
+        )
+        with _ACTIVE_RUNS_LOCK:
+            _ACTIVE_RUNS.setdefault(session_key, {})
+            _ACTIVE_RUNS[session_key]["pid"] = proc.pid
+        _app_log("INFO", "worker", f"Worker-Prozess PID {proc.pid} läuft.")
+
+        for line in proc.stdout:  # type: ignore[union-attr]
+            stripped = line.rstrip()
+            with _ACTIVE_RUNS_LOCK:
+                _ACTIVE_RUNS.setdefault(session_key, {}).setdefault("lines", []).append(stripped)
+            lower = stripped.lower()
+            if '"level": "error"' in lower or '"level":"error"' in lower:
+                _app_log("ERROR", "worker.subprocess", stripped)
+            elif '"level": "warning"' in lower or '"level":"warning"' in lower:
+                _app_log("WARNING", "worker.subprocess", stripped)
+        proc.wait()
+        exit_code = proc.returncode
+        with _ACTIVE_RUNS_LOCK:
+            _ACTIVE_RUNS.setdefault(session_key, {})["exit"] = exit_code
+        if exit_code == 0:
+            _app_log("INFO", "worker", "Worker erfolgreich abgeschlossen (Exit 0).")
+        else:
+            _app_log("ERROR", "worker", f"Worker beendet mit Exit-Code {exit_code}.")
+    except Exception as exc:  # noqa: BLE001
+        _app_log("ERROR", "worker", f"Worker-Thread Exception: {exc}",
+                 detail="".join(_traceback.format_exc()))
+        with _ACTIVE_RUNS_LOCK:
+            _ACTIVE_RUNS.setdefault(session_key, {}).setdefault("lines", []).append(f"[FEHLER] {exc}")
+            _ACTIVE_RUNS.setdefault(session_key, {})["exit"] = -1
+    finally:
+        with _ACTIVE_RUNS_LOCK:
+            _ACTIVE_RUNS.setdefault(session_key, {})["running"] = False
+
+
 def page_run_commands(_run_id: str) -> None:
-    st.header("🔧 Run Commands – Command Builder")
-    st.info("Das Dashboard startet den Worker **nicht** selbst. Befehl kopieren und im Terminal ausführen.")
+    st.title("Run-Zentrale")
 
     cfg = repo.config
+    latest_summary = _summary(runs[0]) if runs else {}
+
+    # -----------------------------------------------------------------------
+    # 1. Systemstatus
+    # -----------------------------------------------------------------------
+    st.subheader("Systemstatus")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Letzter Run", _fmt_ts(latest_summary.get("started_at")) if latest_summary else "-")
+    c2.metric("Status", latest_summary.get("status", "-").upper() if latest_summary else "-")
+    c3.metric("Fehler", latest_summary.get("files_error", 0) if latest_summary else "-")
+    c4.metric("needs_ai offen", latest_summary.get("needs_ai_count", 0) if latest_summary else "-")
+
+    st.divider()
+
+    # -----------------------------------------------------------------------
+    # 2. Einstellungen
+    # -----------------------------------------------------------------------
+    st.subheader("Einstellungen")
 
     col1, col2 = st.columns(2)
     with col1:
-        mode = st.selectbox(
+        st.markdown("**Modus**")
+        mode = st.radio(
             "Modus",
-            ["scan", "classify dry-run", "classify echtlauf"],
+            ["Scan (nur lesen)", "Classify – Dry-Run (kein Schreiben)", "Classify – Echtlauf (schreibt Tags in Azure)"],
             index=0,
+            label_visibility="collapsed",
         )
-        prefix = st.text_input("Prefix", value=cfg.default_prefix or "")
-        max_files = st.number_input("Max Files", min_value=0, value=cfg.default_max_files, step=10)
+        st.markdown("**Datei-Auswahl**")
+        prefix = st.text_input(
+            "Prefix (leer = alle Dateien)",
+            value=cfg.default_prefix or "",
+            help='Nur Blobs mit diesem Prefix verarbeiten, z. B. "_root_part000/102129"',
+        )
+        max_files = st.number_input(
+            "Maximale Anzahl Dateien (0 = unbegrenzt)",
+            min_value=0,
+            value=cfg.default_max_files,
+            step=10,
+        )
+        force = st.checkbox(
+            "Force: bereits klassifizierte Dateien erneut verarbeiten",
+            value=False,
+        )
+
     with col2:
-        force = st.checkbox("--force (bereits klassifizierte neu verarbeiten)", value=False)
-        enable_ai = st.checkbox("KI aktivieren (ENABLE_AI)", value=False)
-        ai_provider = st.selectbox("KI-Anbieter", ["none", "foundry"], index=0,
-                                   disabled=not enable_ai)
+        st.markdown("**KI**")
+        enable_ai = st.checkbox("KI aktivieren", value=False)
+        ai_provider = st.selectbox(
+            "KI-Anbieter",
+            ["groq", "foundry"],
+            index=0,
+            disabled=not enable_ai,
+        )
         ai_max_calls = st.number_input(
-            "AI Max Calls", min_value=1, value=cfg.ai_max_calls_per_run, step=5,
+            "Max. KI-Aufrufe pro Lauf",
+            min_value=1,
+            value=cfg.ai_max_calls_per_run,
+            step=5,
             disabled=not enable_ai,
         )
 
-    # Build command
-    cmd_parts = ["docker compose run --rm worker"]
-    if mode == "scan":
-        cmd_parts.append("--mode scan")
-        is_classify = False
-        is_dry_run = False
-    elif mode == "classify dry-run":
-        cmd_parts.append("--mode classify --dry-run")
-        is_classify = True
-        is_dry_run = True
+    # Resolve mode flags
+    if mode.startswith("Scan"):
+        _mode_args = ["--mode", "scan"]
+        is_classify, is_dry_run = False, False
+    elif "Dry-Run" in mode:
+        _mode_args = ["--mode", "classify", "--dry-run"]
+        is_classify, is_dry_run = True, True
     else:
-        cmd_parts.append("--mode classify")
-        is_classify = True
-        is_dry_run = False
+        _mode_args = ["--mode", "classify"]
+        is_classify, is_dry_run = True, False
 
+    worker_args: list[str] = list(_mode_args)
     if prefix:
-        cmd_parts.append(f'--prefix "{prefix}"')
+        worker_args += ["--prefix", prefix]
     if max_files:
-        cmd_parts.append(f"--max-files {int(max_files)}")
+        worker_args += ["--max-files", str(int(max_files))]
     if force:
-        cmd_parts.append("--force")
+        worker_args.append("--force")
     if enable_ai:
-        cmd_parts.append("--enable-ai")
+        worker_args.append("--enable-ai")
         if ai_provider != "none":
-            cmd_parts.append(f"--ai-provider {ai_provider}")
-        cmd_parts.append(f"--ai-max-calls {int(ai_max_calls)}")
+            worker_args += ["--ai-provider", ai_provider]
+        worker_args += ["--ai-max-calls", str(int(ai_max_calls))]
 
-    st.divider()
-    st.subheader("Generierter Befehl")
-    st.code(" \\\n  ".join(cmd_parts), language="bash")
-
+    # Warnings before start
     if is_classify and not is_dry_run:
         st.error(
-            "**Echter Classify-Lauf**: Tags und Metadata werden in Azure geschrieben. "
-            "Zuerst mit `classify dry-run` testen!"
+            "Echter Classify-Lauf: Tags und Metadata werden in Azure geschrieben. "
+            "Bitte vorher einen Dry-Run durchführen."
         )
+    elif is_dry_run:
+        st.success("Dry-Run: Es wird nichts nach Azure geschrieben.")
     if force:
-        st.warning(
-            "**--force aktiv**: Bereits klassifizierte Dateien werden erneut verarbeitet "
-            "und Tags überschrieben."
-        )
+        st.warning("Force aktiv: Bereits klassifizierte Dateien werden neu verarbeitet und Tags überschrieben.")
     if enable_ai:
-        st.warning(
-            "**KI aktiviert**: KI-Aufrufe kosten Token. "
-            "Zuerst mit Dry-Run testen. Keine KI-Aktivierung ohne explizite Freigabe."
-        )
+        st.warning("KI aktiviert: Aufrufe kosten Token-Budget. Zuerst Dry-Run empfohlen.")
 
     st.divider()
-    st.subheader("Auth-Modi")
-    st.markdown("""
-| AUTH_MODE | Beschreibung |
-|-----------|-------------|
-| `device_code` | Browser-Login via Device-Code-URL (lokaler Docker-Test) |
-| `default` | DefaultAzureCredential (az login / Managed Identity) |
-| `connection_string` | Direkte Connection String (nur Notfall!) |
-    """)
+
+    # -----------------------------------------------------------------------
+    # 3. Start / Abbrechen
+    # -----------------------------------------------------------------------
+    st.subheader("Ausführen")
+
+    SK = "run_worker"  # global store key
+
+    with _ACTIVE_RUNS_LOCK:
+        if SK not in _ACTIVE_RUNS:
+            _ACTIVE_RUNS[SK] = {
+                "running": False,
+                "lines": [],
+                "exit": None,
+                "pid": None,
+                "args": [],
+            }
+        run_info = dict(_ACTIVE_RUNS[SK])
+        run_info["lines"] = list(_ACTIVE_RUNS[SK]["lines"])  # copy log lines
+
+    running = run_info["running"]
+
+    col_start, col_stop, col_clear = st.columns([2, 1, 1])
+    with col_start:
+        start_label = "Läuft..." if running else "Jetzt starten"
+        if st.button(start_label, type="primary", disabled=running, use_container_width=True):
+            with _ACTIVE_RUNS_LOCK:
+                _ACTIVE_RUNS[SK]["running"] = True
+                _ACTIVE_RUNS[SK]["lines"] = []
+                _ACTIVE_RUNS[SK]["exit"] = None
+                _ACTIVE_RUNS[SK]["pid"] = None
+                _ACTIVE_RUNS[SK]["args"] = worker_args
+            t = threading.Thread(
+                target=_worker_thread,
+                args=(worker_args, SK),
+                daemon=True,
+            )
+            t.start()
+            st.rerun()
+
+    with col_stop:
+        if st.button("Abbrechen", disabled=not running, use_container_width=True):
+            pid = run_info["pid"]
+            if pid:
+                try:
+                    import signal
+                    os.kill(pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            with _ACTIVE_RUNS_LOCK:
+                _ACTIVE_RUNS[SK]["running"] = False
+            st.rerun()
+
+    with col_clear:
+        if st.button("Log leeren", disabled=running, use_container_width=True):
+            with _ACTIVE_RUNS_LOCK:
+                _ACTIVE_RUNS[SK]["lines"] = []
+                _ACTIVE_RUNS[SK]["exit"] = None
+                _ACTIVE_RUNS[SK]["pid"] = None
+                _ACTIVE_RUNS[SK]["args"] = []
+            st.rerun()
+
+    # -----------------------------------------------------------------------
+    # 4. Live-Output
+    # -----------------------------------------------------------------------
+    output_lines = run_info["lines"]
+    exit_code = run_info["exit"]
+    used_args = run_info["args"]
+
+    if running or output_lines:
+        st.divider()
+        if used_args:
+            st.caption(f"Befehl: `python -m app.main {' '.join(used_args)}`")
+
+        if running:
+            st.info(f"Worker läuft ... ({len(output_lines)} Zeilen bisher)")
+        elif exit_code == 0:
+            st.success(f"Worker abgeschlossen. Exit-Code: {exit_code}")
+        else:
+            if exit_code is not None:
+                st.error(f"Worker beendet mit Exit-Code {exit_code}")
+
+        output_box = st.empty()
+        display = "\n".join(output_lines[-200:]) if output_lines else "(kein Output)"
+        output_box.code(display, language="text")
+
+        if running:
+            time.sleep(1)
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -896,7 +1200,7 @@ def page_cockpit() -> None:
     c1b.metric("Source Container", repo.config.source_container)
     c2b.metric("Report Container", repo.config.report_container)
     c3b.metric("Prefix", repo.config.worker_version + "/")
-    c4b.metric("Letzter Run", latest[:19].replace("T", " ") if latest else "-")
+    c4b.metric("Letzter Run", _fmt_ts(latest) if latest else "-")
 
     st.divider()
     st.subheader("System-Status")
@@ -911,7 +1215,7 @@ def page_cockpit() -> None:
     comp.metric_row({
         "Letzter Run Status": summary.get("status", "-").upper(),
         "Mode": summary.get("mode", "-"),
-        "Gestartet": str(summary.get("started_at", "-"))[:19].replace("T", " "),
+        "Gestartet": _fmt_ts(summary.get("started_at")),
         "Dauer (s)": f"{summary.get('duration_seconds', 0):.1f}",
     })
     st.divider()
@@ -1006,27 +1310,49 @@ def page_cockpit() -> None:
         st.divider()
         st.markdown("##### Metadaten- & Tagging-Coverage")
         c_meta_1, c_meta_2, c_meta_3 = st.columns(3)
-        
+
         total_files = len(details_df)
-        with_meta = details_df["metadata_written"].astype(str).eq("true").sum() if "metadata_written" in details_df.columns else 0
-        with_tags = details_df["tags_written"].astype(str).eq("true").sum() if "tags_written" in details_df.columns else 0
-        with_llm = details_df["llm_used"].astype(str).eq("true").sum() if "llm_used" in details_df.columns else 0
-        
+        # Case-insensitive "true" matching to handle both Python bool-string repr and lowercase
+        def _count_true(df: "pd.DataFrame", col: str) -> int:
+            if col not in df.columns:
+                return 0
+            return int(df[col].astype(str).str.lower().eq("true").sum())
+
+        with_meta = _count_true(details_df, "metadata_written")
+        with_tags = _count_true(details_df, "tags_written")
+        with_llm = _count_true(details_df, "llm_used")
+        with_classified = int((details_df["status"].astype(str) == "classified").sum()) if "status" in details_df.columns else 0
+
         c_meta_1.metric(
-            "Metadaten geschrieben", 
-            f"{with_meta} / {total_files}", 
-            f"{with_meta/total_files*100:.1f}% Coverage" if total_files > 0 else "0%"
+            "Metadaten geschrieben",
+            f"{with_meta} / {total_files}",
+            f"{with_meta/total_files*100:.1f}% Coverage" if total_files > 0 else "0%",
         )
         c_meta_2.metric(
-            "Blob-Tags geschrieben", 
-            f"{with_tags} / {total_files}", 
-            f"{with_tags/total_files*100:.1f}% Coverage" if total_files > 0 else "0%"
+            "Blob-Tags geschrieben",
+            f"{with_tags} / {total_files}",
+            f"{with_tags/total_files*100:.1f}% Coverage" if total_files > 0 else "0%",
         )
         c_meta_3.metric(
-            "LLM KI-Analyse genutzt", 
-            f"{with_llm} / {total_files}", 
-            f"{with_llm/total_files*100:.1f}% aller Dateien" if total_files > 0 else "0%"
+            "LLM KI-Analyse genutzt",
+            f"{with_llm} / {total_files}",
+            f"{with_llm/total_files*100:.1f}% aller Dateien" if total_files > 0 else "0%",
         )
+        # Explain low coverage figures
+        note_parts = []
+        if total_files > 0 and with_classified > 0 and with_llm > 0:
+            note_parts.append(
+                f"KI bei {with_llm}/{total_files} Dateien genutzt "
+                f"({with_llm/total_files*100:.0f}%). "
+                f"Klassifiziert: {with_classified}/{total_files}."
+            )
+        if total_files > 0 and (with_meta == 0 or with_tags == 0) and with_classified > 0:
+            note_parts.append(
+                "Metadaten/Tags nicht in Azure geschrieben "
+                "(AI_WRITE_TAGS=false oder Dry-Run)."
+            )
+        if note_parts:
+            st.caption(" ".join(note_parts))
     else:
         st.warning("Keine detaillierten Klassifizierungsdaten für Diagrammverteilung vorhanden.")
 
@@ -1062,21 +1388,26 @@ def page_runs() -> None:
     rows = []
     for s in all_s:
         run_id = s.get("_run_id", s.get("run_id", "-"))
+        h = _health(s)
         rows.append({
+            "Health": {"green": "GRÜN", "yellow": "GELB", "red": "ROT"}.get(h, "?"),
             "Run-ID": run_id,
-            "Datum/Uhrzeit": str(s.get("started_at", "-"))[:19].replace("T", " "),
+            "Datum/Uhrzeit": _fmt_ts(s.get("started_at")),
             "Modus": s.get("mode", "-"),
-            "Dry Run": "✓" if s.get("dry_run") else "",
-            "Force": "✓" if s.get("force") else "",
+            "Dry Run": "Ja" if s.get("dry_run") else "Nein",
+            "Force": "Ja" if s.get("force") else "Nein",
             "Prefix": s.get("prefix", "-"),
             "Max Files": s.get("max_files", "-"),
             "Gesehen": s.get("files_seen", 0),
             "Verarbeitet": s.get("files_processed", 0),
             "Unknown": s.get("files_unknown", 0),
-            "KI-Kandidaten": s.get("ai_candidates", 0),
+            "needs_ai": s.get("needs_ai_count", 0),
+            "retry_recommended": s.get("retry_recommended_count", 0),
+            "KI-Calls": s.get("ai_calls_used", 0),
+            "Tokens": s.get("ai_total_tokens", 0),
             "Fehler": s.get("files_error", 0),
-            "KI-Aufrufe": s.get("ai_calls_used", 0),
             "Status": s.get("status", "-").upper(),
+            "Dauer (s)": round(float(s.get("duration_seconds", 0)), 1),
         })
 
     df = pd.DataFrame(rows)
@@ -1086,17 +1417,21 @@ def page_runs() -> None:
         with c1:
             df = comp.multiselect_filter(df, "Modus", "Modus")
             df = comp.multiselect_filter(df, "Status", "Status")
+            df = comp.multiselect_filter(df, "Health", "Health")
         with c2:
             only_errors = st.checkbox("Nur Läufe mit Fehlern", value=False)
             if only_errors:
                 df = df[df["Fehler"] > 0]
             only_dry = st.checkbox("Nur Dry Runs", value=False)
             if only_dry:
-                df = df[df["Dry Run"] == "✓"]
+                df = df[df["Dry Run"] == "Ja"]
+            only_needs_ai = st.checkbox("Nur mit needs_ai > 0", value=False)
+            if only_needs_ai:
+                df = df[pd.to_numeric(df["needs_ai"], errors="coerce").fillna(0) > 0]
         with c3:
             only_ai = st.checkbox("Nur mit AI-Aufrufen", value=False)
             if only_ai:
-                df = df[pd.to_numeric(df["KI-Aufrufe"], errors="coerce").fillna(0) > 0]
+                df = df[pd.to_numeric(df["KI-Calls"], errors="coerce").fillna(0) > 0]
 
     st.caption(
         f"{len(df)} Läufe · Neueste zuerst · "
@@ -1142,7 +1477,7 @@ def page_run_detail(run_id: str) -> None:
     force = summary.get("force", False)
     c1, c2, c3 = st.columns(3)
     c1.metric("Schreiboperationen", "DEAKTIVIERT" if dry_run else "AKTIV")
-    c2.metric("Force-Modus", "✓ Aktiv" if force else "Nein")
+    c2.metric("Force-Modus", "Aktiv" if force else "Nein")
     c3.metric("KI aktiviert", "Ja" if summary.get("enable_ai", False) else "Nein")
     if not dry_run:
         st.warning("Dieser Lauf hat Tags/Metadata in Azure geschrieben.")
@@ -1200,7 +1535,28 @@ def page_run_detail(run_id: str) -> None:
         )
 
     st.divider()
-    st.subheader("7. Fehler")
+    st.subheader("7. Token Summary")
+    if int(summary.get("ai_calls_used", 0)) > 0:
+        comp.token_summary_card(summary)
+        tok_admin = admin.get("token_summary", {})
+        if tok_admin:
+            with st.expander("Token Details aus admin-report.json", expanded=False):
+                st.json(tok_admin)
+    else:
+        st.info("Kein AI-Aufruf in diesem Lauf – Token-Summary nicht verfügbar.")
+
+    st.divider()
+    st.subheader("8. Extraction Summary")
+    if int(summary.get("extraction_success_count", 0)) > 0 or int(summary.get("extracted_chars_total", 0)) > 0:
+        comp.extraction_summary_card(summary)
+        method_counts = summary.get("extraction_method_counts", "")
+        if method_counts:
+            st.caption(f"Extraktoren: `{method_counts}`")
+    else:
+        st.info("Keine Extraktion in diesem Lauf – oder Report enthält keine Extraktionsdaten.")
+
+    st.divider()
+    st.subheader("9. Fehler")
     err_sum = admin.get("errors_summary", [])
     if err_sum:
         comp.show_dataframe(pd.DataFrame(err_sum), height=250)
@@ -1210,7 +1566,7 @@ def page_run_detail(run_id: str) -> None:
     risks = admin.get("risk_assessment", [])
     if risks:
         st.divider()
-        st.subheader("Risiken")
+        st.subheader("10. Risiken")
         for r in risks:
             if r.get("severity") == "error":
                 st.error(r.get("message", ""))
@@ -1218,7 +1574,7 @@ def page_run_detail(run_id: str) -> None:
                 st.warning(r.get("message", ""))
 
     st.divider()
-    st.subheader("8. Report-Dateien")
+    st.subheader("11. Report-Dateien")
     report_files = repo.list_report_files(run_id)
     if report_files:
         st.code("\n".join(report_files))
@@ -1280,12 +1636,15 @@ def page_classification(run_id: str) -> None:
                 with c1:
                     df_det = comp.multiselect_filter(df_det, "class", "Klasse")
                     df_det = comp.multiselect_filter(df_det, "status", "Status")
-                with c2:
-                    df_det = comp.multiselect_filter(df_det, "dsgvo", "DSGVO")
-                    df_det = comp.multiselect_filter(df_det, "archive_candidate", "Archiv-Kandidat")
-                with c3:
-                    df_det = comp.multiselect_filter(df_det, "llm_used", "LLM genutzt")
                     df_det = comp.multiselect_filter(df_det, "extension", "Dateiendung")
+                with c2:
+                    df_det = comp.multiselect_filter(df_det, "llm_used", "LLM genutzt")
+                    df_det = comp.multiselect_filter(df_det, "needs_ai", "needs_ai")
+                    df_det = comp.multiselect_filter(df_det, "retry_recommended", "retry_recommended")
+                with c3:
+                    df_det = comp.multiselect_filter(df_det, "extraction_method", "Extraction Method")
+                    df_det = comp.multiselect_filter(df_det, "ai_called", "AI aufgerufen")
+                    df_det = comp.multiselect_filter(df_det, "reason_code", "Reason Code")
                 if "confidence" in df_det.columns:
                     df_det["_conf"] = pd.to_numeric(df_det["confidence"], errors="coerce").fillna(0)
                     mn, mx = st.slider("Confidence-Bereich", 0, 100, (0, 100))
@@ -1293,10 +1652,12 @@ def page_classification(run_id: str) -> None:
                     df_det = df_det.drop(columns=["_conf"])
                 df_det = comp.text_search_filter(df_det, "blob_name", "Blob-Name enthält")
             st.caption(f"{len(df_det)} Einträge nach Filter")
-            show_cols = [c for c in ["blob_name", "class", "confidence", "dsgvo",
-                                     "archive_candidate", "llm_used", "reason_code",
-                                     "status", "processed_at"]
-                         if c in df_det.columns]
+            show_cols = [c for c in [
+                "blob_name", "class", "confidence", "llm_used", "needs_ai",
+                "retry_recommended", "extension", "extraction_method",
+                "ai_called", "ai_total_tokens", "ai_latency_ms",
+                "reason_code", "status", "processed_at",
+            ] if c in df_det.columns]
             comp.show_dataframe(df_det[show_cols] if show_cols else df_det, height=480)
 
     with tab3:
@@ -1347,8 +1708,25 @@ def page_ki_readiness(run_id: str) -> None:
         "KI-Aufrufe": summary.get("ai_calls_used", 0),
         "KI-Übersprungen": summary.get("ai_calls_skipped", 0),
         "KI-Fehler": summary.get("ai_errors", 0),
-        "needs_ai=true": ai_r.get("needs_ai_total", 0),
+        "needs_ai=true": ai_r.get("needs_ai_total", summary.get("needs_ai_count", 0)),
     })
+    comp.metric_row({
+        "retry_recommended": summary.get("retry_recommended_count", 0),
+        "budget_exhausted": summary.get("ai_skipped_budget_exhausted_count", 0),
+        "Estimated Tokens Buffered": summary.get("ai_estimated_tokens_buffered_total", 0),
+        "Safety Factor": summary.get("ai_token_estimation_safety_factor", "-"),
+    })
+
+    _max_calls = int(summary.get("ai_max_calls_per_run", 0))
+    _used = int(summary.get("ai_calls_used", 0))
+    if _max_calls > 0:
+        _remaining = _max_calls - _used
+        if _remaining <= 0:
+            st.warning(f"AI Budget erschöpft: {_used}/{_max_calls} Calls verwendet. Nächsten Lauf starten.")
+        elif _remaining <= 3:
+            st.warning(f"AI Budget fast erschöpft: {_remaining} Calls übrig (von {_max_calls}).")
+        else:
+            st.info(f"AI Budget: {_remaining} von {_max_calls} Calls noch verfügbar.")
 
     top_ext = ai_r.get("top_extensions", [])
     if top_ext:
@@ -1612,7 +1990,21 @@ def page_errors_risks(run_id: str) -> None:
 
 def page_reports_exports(run_id: str) -> None:
     st.header("Reports & Exporte")
-    st.caption(f"Run: `{run_id}`")
+    summary = _summary(run_id)
+    started_at = _fmt_ts(summary.get("started_at")) if summary else ""
+    finished_at = _fmt_ts(summary.get("finished_at")) if summary else ""
+    duration = summary.get("duration_seconds", None) if summary else None
+    status = summary.get("status", "").upper() if summary else ""
+    parts = [f"`{run_id}`"]
+    if started_at:
+        parts.append(f"Gestartet: **{started_at}**")
+    if finished_at:
+        parts.append(f"Beendet: **{finished_at}**")
+    if duration is not None:
+        parts.append(f"Dauer: **{float(duration):.1f}s**")
+    if status:
+        parts.append(f"Status: **{status}**")
+    st.caption("  ·  ".join(parts))
 
     report_files = repo.list_report_files(run_id)
     if report_files:
@@ -1722,6 +2114,8 @@ def page_config_new() -> None:
     st.header("Konfiguration")
     st.info("Read-only. Keine Secrets werden angezeigt.")
     cfg = repo.config
+    # Pull AI model/version from latest run-summary if available
+    latest_summary = _summary(runs[0]) if runs else {}
     config_data = {
         "worker_name": cfg.worker_name,
         "worker_version": cfg.worker_version,
@@ -1734,7 +2128,13 @@ def page_config_new() -> None:
         "AUTH_MODE": cfg.auth_mode,
         "ENABLE_AI": cfg.enable_ai,
         "AI_PROVIDER": cfg.ai_provider,
+        "AI_MODEL": latest_summary.get("ai_model", cfg.ai_model or "(nicht gesetzt)"),
+        "AI_PROMPT_VERSION": latest_summary.get("ai_prompt_version", cfg.ai_prompt_version or "(nicht gesetzt)"),
         "AI_MAX_CALLS_PER_RUN": cfg.ai_max_calls_per_run,
+        "AI_TOKEN_ESTIMATION_SAFETY_FACTOR": latest_summary.get(
+            "ai_token_estimation_safety_factor", cfg.ai_token_estimation_safety_factor
+        ),
+        "PDF_MAX_PAGES": cfg.pdf_max_pages,
         "AZURE_STORAGE_CONNECTION_STRING":
             "Secret-Konfiguration aktiv – Wert wird nicht angezeigt."
             if cfg.connection_string else "(nicht gesetzt)",
@@ -1833,9 +2233,383 @@ def page_run_commands_new() -> None:
 | `connection_string` | Direkte Connection String (nur Notfall!) |
     """)
 
+    st.divider()
+    st.subheader("Vorfertigte Befehle (Copy & Paste)")
+    st.caption("Kein Befehl wird automatisch ausgeführt. Manuell in Terminal einfügen.")
+    PRESETS = [
+        ("Scan (alle Blobs zählen)",
+         "docker compose run --rm worker --mode scan"),
+        ("Classify Dry Run – 50 Dateien",
+         "docker compose run --rm worker --mode classify --dry-run --max-files 50"),
+        ("Classify Live – 10 Dateien (kontrolliert)",
+         "docker compose run --rm worker --mode classify --max-files 10"),
+        ("PDF Einzeltest – 1133248",
+         'docker compose run --rm worker --mode classify --prefix "_root_part000/1133248" --max-files 1'),
+        ("PDF Einzeltest – 1235690",
+         'docker compose run --rm worker --mode classify --prefix "_root_part000/1235690" --max-files 1'),
+        ("needs_ai Retry – max-files=10",
+         "docker compose run --rm worker --mode classify --max-files 10"),
+        ("Skalierung – max-files=50 (klassifizierte werden übersprungen)",
+         "docker compose run --rm worker --mode classify --max-files 50"),
+        ("Docker Tests",
+         "docker compose run --rm worker python -m pytest tests/ -q"),
+    ]
+    for label, cmd in PRESETS:
+        with st.expander(label):
+            st.code(cmd, language="bash")
+
+    st.divider()
+    st.warning(
+        "**Wichtige Leitplanken:**\n"
+        "- `--force` nur mit ausdrücklicher Freigabe\n"
+        "- Immer `--max-files` setzen\n"
+        "- `AI_MAX_CALLS_PER_RUN` bewusst setzen\n"
+        "- Keine Massenschreibläufe ohne vorherigen Dry Run\n"
+        "- Keine PDF/DOC-Mischung ohne Absicht\n"
+        "- Secrets niemals in Befehle schreiben"
+    )
+
 
 # ---------------------------------------------------------------------------
-# Router (neu – 10 Bereiche)
+# 11. Observability
+# ---------------------------------------------------------------------------
+
+def page_observability(run_id: str) -> None:
+    st.header("Observability")
+    st.caption(f"Run: `{run_id}`")
+    summary = _summary(run_id)
+    admin = _admin_report(run_id)
+
+    if not summary:
+        comp.empty_state("run-summary.json nicht gefunden.")
+        return
+
+    obs = admin.get("observability_summary", {})
+
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Run Timing", "Extraktion", "AI Metriken", "Quality Proxy",
+        "Fehlende Felder", "App Insights",
+    ])
+
+    # -------------------------------------------------------------------
+    # A. Run Timing
+    # -------------------------------------------------------------------
+    with tab1:
+        st.subheader("Run Timing")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Dauer (s)", f"{float(summary.get('duration_seconds', 0)):.2f}")
+        c2.metric("Dateien/Stunde", summary.get("throughput_files_per_hour", "-"))
+        c3.metric("GB/Stunde", summary.get("throughput_gb_per_hour", "-"))
+        c4.metric("AI Latenz Ø (ms)", summary.get("ai_latency_ms_avg", "-"))
+
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("AI Latenz Max (ms)", summary.get("ai_latency_ms_max", "-"))
+        c6.metric("Gestartet", _fmt_ts(summary.get("started_at")))
+        c7.metric("Beendet", _fmt_ts(summary.get("finished_at")))
+        c8.metric("GB verarbeitet", f"{float(summary.get('gb_processed', 0)):.5f}")
+
+        st.caption(
+            "blob_processing_duration_ms, download_duration_ms, extraction_duration_ms, "
+            "report_upload_duration_ms: **noch nicht implementiert** – Priorität Niedrig."
+        )
+
+    # -------------------------------------------------------------------
+    # B. Extraktion
+    # -------------------------------------------------------------------
+    with tab2:
+        st.subheader("Extraktion Metriken")
+        comp.extraction_summary_card(summary)
+
+        method_counts = summary.get("extraction_method_counts", obs.get("extraction_method_counts", "-"))
+        st.info(f"**Extraktoren:** `{method_counts}`")
+
+        details_df = _csv(run_id, "classification-details.csv")
+        if not details_df.empty and "extraction_method" in details_df.columns:
+            em_counts = details_df["extraction_method"].replace("", "direct/none").value_counts().reset_index()
+            em_counts.columns = ["Methode", "Anzahl"]
+            st.subheader("Extraction Method Verteilung")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                comp.show_dataframe(em_counts, height=200)
+            with c2:
+                if not em_counts.empty:
+                    st.bar_chart(em_counts.set_index("Methode")["Anzahl"])
+
+        st.caption(
+            "pdf_pages_total/sampled, extraction_duration_ms_total: **noch nicht in RunSummary aggregiert**."
+        )
+
+    # -------------------------------------------------------------------
+    # C. AI Metriken
+    # -------------------------------------------------------------------
+    with tab3:
+        st.subheader("AI Metriken")
+        comp.ai_summary_card(summary)
+        st.divider()
+        st.subheader("Token Report")
+        comp.token_summary_card(summary)
+
+        st.divider()
+        tok = admin.get("token_summary", {})
+        if tok:
+            with st.expander("Token Summary (admin-report.json)", expanded=False):
+                st.json(tok)
+
+    # -------------------------------------------------------------------
+    # D. Quality Proxy Metrics
+    # -------------------------------------------------------------------
+    with tab4:
+        st.subheader("Quality Proxy Metriken")
+        st.warning(
+            "**Echte AI Accuracy ist noch nicht messbar** ohne Ground-Truth-Labels "
+            "oder Human-Review-Ergebnisse.\n\n"
+            "Verfügbare Proxy-Metriken: confidence, unknown_count, needs_ai_count, "
+            "retry_recommended_count, ai_errors."
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("files_unknown", summary.get("files_unknown", 0))
+        c2.metric("needs_ai_count", summary.get("needs_ai_count", 0))
+        c3.metric("retry_recommended_count", summary.get("retry_recommended_count", 0))
+        c4.metric("ai_errors", summary.get("ai_errors", 0))
+
+        # Confidence distribution
+        details_df = _csv(run_id, "classification-details.csv")
+        if not details_df.empty and "confidence" in details_df.columns:
+            conf_num = pd.to_numeric(details_df["confidence"], errors="coerce").dropna()
+            if not conf_num.empty:
+                st.subheader("Confidence-Verteilung")
+                conf_hist = pd.cut(
+                    conf_num, bins=[0, 60, 75, 90, 100], labels=["<60 (niedrig)", "60–75", "75–90", "90–100"]
+                ).value_counts().reset_index()
+                conf_hist.columns = ["Confidence-Bereich", "Anzahl"]
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    comp.show_dataframe(conf_hist, height=200)
+                with c2:
+                    st.bar_chart(conf_hist.set_index("Confidence-Bereich")["Anzahl"])
+
+        st.caption(
+            "validation_success_count, validation_error_count, human_review_required_count: "
+            "**noch nicht implementiert**."
+        )
+        st.markdown("""
+**Für echte AI Accuracy später nötig:**
+- `ground_truth_class` – Referenz-Klasse von Human Review
+- `human_corrected_class` – Korrektur durch Reviewer
+- `ai_was_correct` (bool)
+- `review_status`, `reviewer`, `reviewed_at`
+        """)
+
+    # -------------------------------------------------------------------
+    # E. Fehlende Felder
+    # -------------------------------------------------------------------
+    with tab5:
+        st.subheader("Fehlende Observability-Felder")
+        st.info(
+            "Automatische Prüfung welche Felder im run-summary.json vorhanden sind "
+            "und welche für Produktionsreife noch fehlen."
+        )
+        comp.observability_missing_fields_table(summary)
+
+        missing_from_admin = obs.get("missing_observability_fields", [])
+        if missing_from_admin:
+            st.divider()
+            st.subheader("Fehlende Felder laut admin-report.json")
+            for f in missing_from_admin:
+                st.markdown(f"- `{f}`")
+
+    # -------------------------------------------------------------------
+    # F. Application Insights Empfehlung
+    # -------------------------------------------------------------------
+    with tab6:
+        st.subheader("Application Insights Empfehlung")
+        st.info("Noch nicht implementiert. Keine Telemetrie wird gesendet. Nur Dokumentation.")
+
+        st.markdown("""
+### Empfohlene customEvents
+
+| Event | Auslöser |
+|-------|----------|
+| `worker_run_started` | Beginn jedes Laufs |
+| `worker_run_finished` | Ende jedes Laufs |
+| `blob_processing_started` | Pro Blob vor Download |
+| `blob_processing_finished` | Pro Blob nach Tag-Write |
+| `extraction_finished` | Nach PyMuPDF/antiword |
+| `ai_call_finished` | Nach Groq/Foundry-Call |
+| `ai_validation_failed` | Wenn Schema-Validierung fehlschlägt |
+| `blob_tag_write_finished` | Nach Azure Tag-Write |
+| `report_upload_finished` | Nach Report-Upload |
+
+### Empfohlene customMetrics
+
+| Metrik | Einheit |
+|--------|---------|
+| `run_duration_ms` | ms |
+| `blob_processing_duration_ms` | ms |
+| `download_duration_ms` | ms |
+| `extraction_duration_ms` | ms |
+| `ai_latency_ms` | ms |
+| `report_upload_duration_ms` | ms |
+| `files_processed` | Anzahl |
+| `ai_calls_used` | Anzahl |
+| `ai_total_tokens` | Tokens |
+| `needs_ai_count` | Anzahl |
+| `retry_recommended_count` | Anzahl |
+
+### Empfohlene customDimensions (Pflicht)
+
+```
+run_id, worker_version, mode, prefix, dry_run, force,
+file_extension, extraction_method, ai_provider, ai_model,
+ai_prompt_version, classification_class, reason_code
+```
+
+### Daten die NIEMALS in Telemetrie aufgenommen werden dürfen
+
+- GROQ_API_KEY oder andere API Keys/Secrets
+- Extrahierte Dateiinhalte
+- Personenbezogene Daten aus Dokumenteninhalten
+- Azure Connection Strings
+        """)
+
+
+# ---------------------------------------------------------------------------
+# App-Log Viewer
+# ---------------------------------------------------------------------------
+
+_LEVEL_CSS = {
+    "DEBUG":    "color:#888;font-size:0.78em",
+    "INFO":     "color:#2196F3;font-size:0.78em",
+    "WARNING":  "color:#FF9800;font-size:0.78em",
+    "ERROR":    "color:#F44336;font-size:0.78em",
+    "CRITICAL": "color:#9C27B0;font-weight:bold;font-size:0.78em",
+}
+
+
+def page_app_logs(_run_id: str) -> None:  # noqa: C901
+    st.title("App Logs")
+
+    # Read buffer once (thread-safe copy)
+    with _LOG_BUFFER_LOCK:
+        all_entries: list[_LogEntry] = list(_LOG_BUFFER)
+
+    # -----------------------------------------------------------------------
+    # Layout: 1/3 filter panel | 2/3 log output
+    # -----------------------------------------------------------------------
+    col_filter, col_log = st.columns([1, 2], gap="medium")
+
+    # -----------------------------------------------------------------------
+    # Filter Panel (left, 1/3)
+    # -----------------------------------------------------------------------
+    with col_filter:
+        st.subheader("Filter & Steuerung")
+
+        selected_levels = st.multiselect(
+            "Log-Level",
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+            default=["INFO", "WARNING", "ERROR", "CRITICAL"],
+        )
+
+        all_components = sorted({e.component for e in all_entries}) if all_entries else []
+        selected_components = st.multiselect(
+            "Komponente",
+            all_components,
+            default=[],
+            placeholder="Alle Komponenten",
+        )
+
+        search_text = st.text_input("Suche (Text / Regex)", placeholder="z.B. error, auth, worker")
+
+        show_details = st.checkbox("Tracebacks immer aufgeklappt", value=False)
+
+        st.divider()
+
+        auto_refresh = st.checkbox("Auto-Refresh (2s)", value=False)
+
+        st.divider()
+
+        total_entries = len(all_entries)
+        error_count = sum(1 for e in all_entries if e.level in ("ERROR", "CRITICAL"))
+        warn_count  = sum(1 for e in all_entries if e.level == "WARNING")
+
+        st.metric("Einträge im Puffer", total_entries, help="Puffer hält max. 2000 Einträge.")
+        if error_count:
+            st.error(f"{error_count} Fehler im Puffer")
+        if warn_count:
+            st.warning(f"{warn_count} Warnungen im Puffer")
+
+        st.divider()
+
+        if st.button("Log leeren", type="secondary", use_container_width=True, disabled=auto_refresh):
+            with _LOG_BUFFER_LOCK:
+                _LOG_BUFFER.clear()
+            st.success("Log geleert.")
+            st.rerun()
+
+        if st.button("Seite aktualisieren", use_container_width=True):
+            st.rerun()
+
+    # -----------------------------------------------------------------------
+    # Log Output (right, 2/3)
+    # -----------------------------------------------------------------------
+    with col_log:
+        # Apply filters
+        filtered = all_entries
+        if selected_levels:
+            filtered = [e for e in filtered if e.level in selected_levels]
+        if selected_components:
+            filtered = [e for e in filtered if e.component in selected_components]
+        if search_text:
+            import re as _re
+            try:
+                pat = _re.compile(search_text, _re.IGNORECASE)
+                filtered = [
+                    e for e in filtered
+                    if pat.search(e.message) or pat.search(e.component) or pat.search(e.detail)
+                ]
+            except _re.error:
+                q = search_text.lower()
+                filtered = [
+                    e for e in filtered
+                    if q in e.message.lower() or q in e.component.lower() or q in e.detail.lower()
+                ]
+
+        # Newest first, cap at 500
+        display_entries = list(reversed(filtered[-500:]))
+
+        st.caption(
+            f"{len(filtered)} Einträge nach Filter  ·  "
+            f"Zeige neueste {min(len(display_entries), 500)}"
+        )
+
+        if not display_entries:
+            st.info("Keine Log-Einträge – starte den Worker oder lade die Seite neu.")
+        else:
+            for entry in display_entries:
+                level_css = _LEVEL_CSS.get(entry.level, "color:gray;font-size:0.78em")
+                # Build compact one-liner with HTML badges
+                line_html = (
+                    f'<span style="color:#888;font-size:0.75em">{entry.ts}</span>&nbsp;'
+                    f'<span style="{level_css};font-weight:bold">[{entry.level}]</span>&nbsp;'
+                    f'<span style="color:#aaa;font-size:0.75em">{entry.component}</span>&nbsp;&nbsp;'
+                    f'<span style="font-size:0.9em">{entry.message}</span>'
+                )
+                if entry.detail:
+                    # Entry has traceback/detail – render expandable
+                    with st.expander("", expanded=show_details):
+                        st.markdown(line_html, unsafe_allow_html=True)
+                        st.code(entry.detail.strip(), language="text")
+                else:
+                    st.markdown(line_html, unsafe_allow_html=True)
+
+        if auto_refresh:
+            time.sleep(2)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Router (neu – 12 Bereiche)
 # ---------------------------------------------------------------------------
 
 NEW_ROUTER = {
@@ -1847,8 +2621,10 @@ NEW_ROUTER = {
     "Dateien & Dateitypen": page_file_types,
     "Fehler & Risiken": page_errors_risks,
     "Reports & Exporte": page_reports_exports,
+    "Observability": page_observability,
     "Konfiguration": lambda _r: page_config_new(),
-    "Run Commands": lambda _r: page_run_commands_new(),
+    "Run Commands": page_run_commands,
+    "App Logs": page_app_logs,
 }
 
 handler = NEW_ROUTER.get(page)

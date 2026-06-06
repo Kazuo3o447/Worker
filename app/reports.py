@@ -484,6 +484,21 @@ def _build_admin_report_json(
         next_actions.append(
             f"Keine Skalierung empfohlen: {unknown_total} Dateien als unknown – Content Extraction + KI empfohlen"
         )
+    _needs_ai_s = getattr(summary, "needs_ai_count", 0)
+    _retry_s = getattr(summary, "retry_recommended_count", 0)
+    _budget_ex_s = getattr(summary, "ai_skipped_budget_exhausted_count", 0)
+    if _needs_ai_s > 0:
+        next_actions.append(
+            f"needs_ai=true: {_needs_ai_s} Dateien warten auf KI – kleinen Retry-Lauf (max-files=10) planen"
+        )
+    if _retry_s > 0:
+        next_actions.append(
+            f"retry_recommended=true: {_retry_s} Dateien – erneuter Lauf ohne --force"
+        )
+    if _budget_ex_s > 0:
+        next_actions.append(
+            f"budget_exhausted: {_budget_ex_s} Dateien wegen Budget übersprungen – AI_MAX_CALLS_PER_RUN erhöhen"
+        )
     if not next_actions:
         next_actions.append("Keine besonderen Maßnahmen erforderlich – Lauf war erfolgreich.")
 
@@ -527,6 +542,14 @@ def _build_admin_report_json(
             "started_at": summary.started_at,
             "finished_at": summary.finished_at,
             "duration_seconds": summary.duration_seconds,
+            "ai_provider": summary.ai_provider if summary.enable_ai else None,
+            "ai_model": getattr(summary, "ai_model", "") if summary.enable_ai else None,
+            "ai_total_tokens": getattr(summary, "ai_total_tokens_sum", 0) if summary.enable_ai else None,
+            "ai_prompt_tokens": getattr(summary, "ai_prompt_tokens_total", 0) if summary.enable_ai else None,
+            "ai_completion_tokens": getattr(summary, "ai_completion_tokens_total", 0) if summary.enable_ai else None,
+            "ai_tokens_per_file_avg": round(
+                getattr(summary, "ai_total_tokens_sum", 0) / max(summary.ai_calls_used, 1), 1
+            ) if summary.enable_ai and summary.ai_calls_used > 0 else None,
         },
         "azure": {
             "storage_account": summary.storage_account,
@@ -582,6 +605,8 @@ def _build_admin_report_json(
             "low_confidence_total": low_conf_total,
             "ai_disabled_total": ai_disabled_total,
             "needs_ai_total": needs_ai_total,
+            "retry_recommended_total": getattr(summary, "retry_recommended_count", 0),
+            "budget_exhausted_count": getattr(summary, "ai_skipped_budget_exhausted_count", 0),
             "top_extensions": [{"ext": e, "count": c} for e, c in top_extensions],
         },
         "classification_readiness": {
@@ -619,6 +644,48 @@ def _build_admin_report_json(
             "success_rate_pct": round(
                 (summary.ai_calls_used - summary.ai_errors) / max(summary.ai_calls_used, 1) * 100, 1
             ) if summary.ai_calls_used > 0 else 0,
+        },
+        "token_summary": {
+            "ai_token_estimation_safety_factor": getattr(summary, "ai_token_estimation_safety_factor", 1.5),
+            "ai_estimated_tokens_raw_total": getattr(summary, "ai_estimated_tokens_raw_total", 0),
+            "ai_estimated_tokens_buffered_total": getattr(summary, "ai_estimated_tokens_buffered_total", 0),
+            "ai_prompt_tokens_total": getattr(summary, "ai_prompt_tokens_total", 0),
+            "ai_completion_tokens_total": getattr(summary, "ai_completion_tokens_total", 0),
+            "ai_total_tokens": getattr(summary, "ai_total_tokens_sum", 0),
+            "ai_latency_ms_avg": getattr(summary, "ai_latency_ms_avg", 0),
+            "ai_latency_ms_max": getattr(summary, "ai_latency_ms_max", 0),
+            "ai_token_source_breakdown": getattr(summary, "ai_token_source_breakdown", ""),
+            "tokens_per_file_avg": round(
+                getattr(summary, "ai_total_tokens_sum", 0) / max(summary.ai_calls_used, 1), 1
+            ) if summary.ai_calls_used > 0 else 0,
+        },
+        "observability_summary": {
+            "structured_logs": True,
+            "run_id_in_logs": True,
+            "event_buffer_to_azure": True,
+            "run_duration_seconds": summary.duration_seconds,
+            "files_per_hour": getattr(summary, "throughput_files_per_hour", 0),
+            "extraction_method_counts": getattr(summary, "extraction_method_counts", ""),
+            "extraction_success_count": getattr(summary, "extraction_success_count", 0),
+            "extracted_chars_total": getattr(summary, "extracted_chars_total", 0),
+            "needs_ai_count": getattr(summary, "needs_ai_count", 0),
+            "retry_recommended_count": getattr(summary, "retry_recommended_count", 0),
+            "ai_skipped_budget_exhausted_count": getattr(summary, "ai_skipped_budget_exhausted_count", 0),
+            "missing_observability_fields": [
+                "blob_processing_duration_ms",
+                "download_duration_ms",
+                "extraction_duration_ms_total",
+                "report_upload_duration_ms",
+                "pdf_pages_total",
+                "pdf_pages_sampled",
+                "validation_error_count",
+                "human_review_required_count",
+            ],
+            "ai_accuracy_available": False,
+            "ai_accuracy_note": (
+                "Echte AI Accuracy noch nicht messbar ohne Ground Truth Labels oder Human Review. "
+                "Proxy-Metriken: confidence, unknown_count, needs_ai_count, retry_recommended_count."
+            ),
         },
         "errors_summary": error_summary,
         "risk_assessment": risks,
@@ -750,15 +817,23 @@ def _build_admin_report_pdf(
 
     # Run Info
     story.append(Paragraph("Run Info", styles["Heading2"]))
+    _ai_model_str = getattr(summary, "ai_model", "") or "-"
     run_data = [
         ["Run-ID", summary.run_id],
         ["Modus", summary.mode],
         ["Dry Run", "Ja" if summary.dry_run else "Nein"],
         ["Force", "Ja" if summary.force else "Nein"],
-        ["Gestartet", str(summary.started_at)[:19].replace("T", " ")],
-        ["Beendet", str(summary.finished_at)[:19].replace("T", " ")],
+        ["Gestartet", str(summary.started_at)[:19].replace("T", " ") + " UTC"],
+        ["Beendet", str(summary.finished_at)[:19].replace("T", " ") + " UTC"],
         ["Dauer (s)", f"{summary.duration_seconds:.1f}"],
     ]
+    if summary.enable_ai:
+        run_data.append(["KI-Provider", summary.ai_provider])
+        run_data.append(["KI-Modell", _ai_model_str])
+        _total_tok = getattr(summary, "ai_total_tokens_sum", 0)
+        _calls = summary.ai_calls_used
+        run_data.append(["Token-Verbrauch gesamt", str(_total_tok)])
+        run_data.append(["Tokens/Datei Ø", str(round(_total_tok / max(_calls, 1), 1)) if _calls else "-"])
     story.append(_pdf_table(run_data))
     story.append(Spacer(1, 0.3 * cm))
 
@@ -776,17 +851,26 @@ def _build_admin_report_pdf(
     # AI Section
     if summary.enable_ai:
         story.append(Paragraph("KI-Analyse", styles["Heading2"]))
+        _pt = getattr(summary, "ai_prompt_tokens_total", 0)
+        _ct = getattr(summary, "ai_completion_tokens_total", 0)
+        _tt = getattr(summary, "ai_total_tokens_sum", 0)
+        _calls_used = summary.ai_calls_used
+        _max_calls = summary.ai_max_calls_per_run
+        _budget_pct = f"{_calls_used / _max_calls * 100:.0f} %" if _max_calls > 0 else "-"
         ai_data = [
             ["Provider", summary.ai_provider],
-            ["Modell", getattr(summary, "ai_model", "-")],
-            ["Promptversion", getattr(summary, "ai_prompt_version", "-")],
-            ["Modus", "Dry Run - keine Tags" if summary.dry_run else "Live"],
-            ["AI Calls", str(summary.ai_calls_used)],
+            ["Modell (LLM)", getattr(summary, "ai_model", "") or "-"],
+            ["Promptversion", getattr(summary, "ai_prompt_version", "-") or "-"],
+            ["Modus", "Dry Run – keine Tags" if summary.dry_run else "Live (Tags geschrieben)"],
+            ["AI Calls genutzt", str(_calls_used)],
+            ["AI Calls Budget", f"{_max_calls} (genutzt: {_budget_pct})"],
             ["AI Fehler", str(summary.ai_errors)],
-            ["Prompt-Tokens gesamt", str(getattr(summary, "ai_prompt_tokens_total", 0))],
-            ["Completion-Tokens gesamt", str(getattr(summary, "ai_completion_tokens_total", 0))],
-            ["Total Tokens", str(getattr(summary, "ai_total_tokens_sum", 0))],
+            ["Prompt-Tokens gesamt", str(_pt)],
+            ["Completion-Tokens gesamt", str(_ct)],
+            ["Total Tokens", str(_tt)],
+            ["Tokens/Datei Ø", str(round(_tt / max(_calls_used, 1), 1)) if _calls_used else "-"],
             ["Latenz avg (ms)", str(round(getattr(summary, "ai_latency_ms_avg", 0), 1))],
+            ["Latenz max (ms)", str(round(getattr(summary, "ai_latency_ms_max", 0), 1))],
         ]
         story.append(_pdf_table(ai_data))
         story.append(Spacer(1, 0.3 * cm))
@@ -903,10 +987,12 @@ def _build_admin_report_pdf(
         story.append(NextPageTemplate("Landscape"))
         story.append(PageBreak())
         
-        story.append(Paragraph("Stichproben & Details (Längstseite / Querformat)", styles["Heading1"]))
+        story.append(Paragraph("Stichproben & Details", styles["Heading1"]))
         story.append(Paragraph(
-            "Hier finden Sie detaillierte Stichproben von bis zu 15 verarbeiteten Dateien mit "
-            "Klassifizierungen, Sicherheitsmarkierungen (DSGVO, Archivierungs-Kandidat) und LLM-Details.",
+            "Diese Dateien dienen als Repräsentanten vergangener Verarbeitungsläufe. Hierbei handelt es sich "
+            "um die ersten 15 erfolgreich klassifizierten Dateien dieses Runs. Sie dienen der stichprobenartigen "
+            "Verifizierung der Klassifizierungsergebnisse, der Sicherheitsmarkierungen (DSGVO-Relevanz, "
+            "Archiv-Kandidaten) sowie der verwendeten Erkennungswege (LLM oder Regelwerk) durch Fachbereiche.",
             styles["Normal"]
         ))
         story.append(Spacer(1, 0.4 * cm))

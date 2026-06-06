@@ -15,6 +15,7 @@ Auth modes:
 from __future__ import annotations
 
 import io
+import pathlib
 from typing import Iterator, Optional
 
 from azure.core.exceptions import AzureError
@@ -49,12 +50,36 @@ class AzureBlobRepository:
             return BlobServiceClient.from_connection_string(cs)
 
         if mode == "device_code":
-            from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions  # noqa: PLC0415
+            from azure.identity import (  # noqa: PLC0415
+                AuthenticationRecord,
+                DeviceCodeCredential,
+                TokenCachePersistenceOptions,
+            )
+
+            # Try to load an AuthenticationRecord saved by the dashboard after
+            # its first successful device-code login.  When available, the
+            # credential can acquire tokens silently without a new device-code
+            # prompt – critical for subprocess runs launched from the UI.
+            auth_record: "AuthenticationRecord | None" = None
+            for _candidate in [
+                pathlib.Path.home() / ".IdentityService" / "auth_record.json",
+                pathlib.Path("/home/dashboard/.IdentityService/auth_record.json"),
+            ]:
+                if _candidate.exists():
+                    try:
+                        auth_record = AuthenticationRecord.deserialize(
+                            _candidate.read_text(encoding="utf-8")
+                        )
+                        break
+                    except Exception:  # noqa: BLE001
+                        pass
+
             credential = DeviceCodeCredential(
+                authentication_record=auth_record,
                 cache_persistence_options=TokenCachePersistenceOptions(
                     name="andre3000",
-                    allow_unencrypted_storage=True,  # required on Linux (Docker)
-                )
+                    allow_unencrypted_storage=True,
+                ),
             )
         else:
             credential = DefaultAzureCredential()

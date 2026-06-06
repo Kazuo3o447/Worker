@@ -550,6 +550,100 @@ class TestAdminReportJson:
         for fname, data in reports.items():
             assert isinstance(data, bytes), f"{fname} is not bytes"
 
+    def test_token_summary_present(self):
+        """admin-report.json must have token_summary section."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            ai_calls_used=1,
+            ai_prompt_tokens_total=839,
+            ai_completion_tokens_total=74,
+            ai_total_tokens_sum=913,
+            ai_estimated_tokens_raw_total=618,
+            ai_estimated_tokens_buffered_total=927,
+            ai_token_estimation_safety_factor=1.5,
+            ai_latency_ms_avg=424.0,
+            ai_latency_ms_max=424,
+            ai_token_source_breakdown="provider_usage:1",
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert "token_summary" in parsed
+        ts = parsed["token_summary"]
+        assert ts["ai_token_estimation_safety_factor"] == 1.5
+        assert ts["ai_prompt_tokens_total"] == 839
+        assert ts["ai_total_tokens"] == 913
+        assert ts["ai_estimated_tokens_raw_total"] == 618
+        assert ts["ai_estimated_tokens_buffered_total"] == 927
+
+    def test_observability_summary_present(self):
+        """admin-report.json must have observability_summary section."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            needs_ai_count=2,
+            retry_recommended_count=1,
+            ai_skipped_budget_exhausted_count=0,
+            extraction_success_count=3,
+            extracted_chars_total=1354,
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert "observability_summary" in parsed
+        obs = parsed["observability_summary"]
+        assert obs["structured_logs"] is True
+        assert obs["run_id_in_logs"] is True
+        assert obs["ai_accuracy_available"] is False
+        assert "missing_observability_fields" in obs
+        assert isinstance(obs["missing_observability_fields"], list)
+        assert len(obs["missing_observability_fields"]) > 0
+
+    def test_ai_readiness_has_retry_and_budget_fields(self):
+        """ai_readiness must include retry_recommended_total and budget_exhausted_count."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            retry_recommended_count=3,
+            ai_skipped_budget_exhausted_count=2,
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        ai_r = parsed["ai_readiness"]
+        assert "retry_recommended_total" in ai_r
+        assert ai_r["retry_recommended_total"] == 3
+        assert "budget_exhausted_count" in ai_r
+        assert ai_r["budget_exhausted_count"] == 2
+
+    def test_next_actions_includes_needs_ai(self):
+        """next_actions must mention needs_ai if needs_ai_count > 0."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            needs_ai_count=5,
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        actions_str = " ".join(parsed["next_actions"])
+        assert "needs_ai" in actions_str
+
+    def test_next_actions_includes_retry_recommended(self):
+        """next_actions must mention retry_recommended if retry_recommended_count > 0."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            retry_recommended_count=4,
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        actions_str = " ".join(parsed["next_actions"])
+        assert "retry_recommended" in actions_str
+
+    def test_token_summary_tokens_per_file_avg(self):
+        """tokens_per_file_avg must be computed correctly."""
+        from app.models import RunSummary
+        summary = RunSummary(
+            run_id=_RUN_ID, mode="classify", status="ok",
+            ai_calls_used=2,
+            ai_total_tokens_sum=1000,
+        )
+        parsed = json.loads(_build_admin_report_json(summary, [], []).decode("utf-8"))
+        assert parsed["token_summary"]["tokens_per_file_avg"] == 500.0
+
 
 class TestAdminReportPdf:
     def test_is_generated_and_bytes(self):

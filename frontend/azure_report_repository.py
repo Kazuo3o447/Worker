@@ -20,6 +20,10 @@ from azure.storage.blob import BlobServiceClient
 # Temp file used to pass device-code URL into the Streamlit UI
 _DEVICE_CODE_MSG_FILE = pathlib.Path(tempfile.gettempdir()) / "azure_device_code.txt"
 
+# Persisted AuthenticationRecord so worker subprocesses can acquire tokens silently
+# without a second device-code prompt.  Stored inside the token-cache volume.
+_AUTH_RECORD_PATH = pathlib.Path.home() / ".IdentityService" / "auth_record.json"
+
 try:
     from frontend.config import FrontendConfig
 except ModuleNotFoundError:
@@ -45,7 +49,11 @@ class AzureReportRepository:
             return BlobServiceClient.from_connection_string(cs)
 
         if mode == "device_code":
-            from azure.identity import DeviceCodeCredential  # noqa: PLC0415
+            from azure.identity import (  # noqa: PLC0415
+                AuthenticationRecord,
+                DeviceCodeCredential,
+                TokenCachePersistenceOptions,
+            )
 
             def _device_code_cb(verification_uri: str, user_code: str, expires_on: object) -> None:  # noqa: ANN001
                 msg = (
@@ -58,14 +66,36 @@ class AzureReportRepository:
                     _DEVICE_CODE_MSG_FILE.write_text(msg, encoding="utf-8")
                 except Exception:  # noqa: BLE001
                     pass  # Non-critical – message also printed to stderr
-                # Also write to container stderr so it appears in docker logs
                 print(
                     f"\n[DEVICE CODE AUTH] Open {verification_uri} and enter code: {user_code}\n",
                     file=sys.__stderr__,
                     flush=True,
                 )
 
-            credential = DeviceCodeCredential(prompt_callback=_device_code_cb)
+            # Load persisted AuthenticationRecord so silent token refresh works
+            # for both this process AND any worker subprocesses.
+            auth_record: Optional[AuthenticationRecord] = None
+            if _AUTH_RECORD_PATH.exists():
+                try:
+                    auth_record = AuthenticationRecord.deserialize(
+                        _AUTH_RECORD_PATH.read_text(encoding="utf-8")
+                    )
+                except Exception:  # noqa: BLE001
+                    auth_record = None
+
+            cache_opts = TokenCachePersistenceOptions(
+                name="andre3000",
+                allow_unencrypted_storage=True,
+            )
+            credential = DeviceCodeCredential(
+                prompt_callback=_device_code_cb,
+                authentication_record=auth_record,
+                cache_persistence_options=cache_opts,
+            )
+            # Store credential on the instance so is_available() can save the
+            # AuthenticationRecord after the first successful token acquisition.
+            self._credential = credential
+            self._cache_opts = cache_opts
         else:
             credential = DefaultAzureCredential()
 
@@ -79,13 +109,38 @@ class AzureReportRepository:
     # ------------------------------------------------------------------
 
     def is_available(self) -> tuple[bool, str]:
-        """Return (ok, error_message). ok=False means dashboard should show error."""
+        """Return (ok, error_message). ok=False means dashboard should show error.
+
+        On first successful connection, persists the AuthenticationRecord so
+        worker subprocesses can acquire tokens silently without a new device code.
+        """
         try:
             cc = self._client.get_container_client(self.config.report_container)
             cc.get_container_properties()
+            # Save AuthenticationRecord after first successful auth so subprocesses
+            # (python -m app.main) can silently reuse the token.
+            self._save_auth_record()
             return True, ""
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
+
+    def _save_auth_record(self) -> None:
+        """Persist AuthenticationRecord for subprocess reuse (idempotent)."""
+        if _AUTH_RECORD_PATH.exists():
+            return  # Already saved
+        cred = getattr(self, "_credential", None)
+        cache_opts = getattr(self, "_cache_opts", None)
+        if cred is None or cache_opts is None:
+            return
+        try:
+            from azure.identity import DeviceCodeCredential, AuthenticationRecord  # noqa: PLC0415
+            record: AuthenticationRecord = cred.authenticate(
+                scopes=["https://storage.azure.com/.default"]
+            )
+            _AUTH_RECORD_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _AUTH_RECORD_PATH.write_text(record.serialize(), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass  # Non-fatal – subprocess will prompt if needed
 
     # ------------------------------------------------------------------
     # Run discovery
