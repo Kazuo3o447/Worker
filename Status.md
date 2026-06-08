@@ -1,9 +1,9 @@
 # Projektstatus â€“ GEMA Storage Classification Pilot
 
-> **Stand:** 2026-06-06  
+> **Stand:** 2026-06-08  
 > **Worker-Name:** Andre3000  
-> **Phase:** 7 â€“ Frontend-UnabhÃ¤ngigkeit, AuthRecord-Persistenz, Timezone-Fix, erweiterter Admin-Report  
-> **Session-Ergebnis:** Erster echter Echtlauf (Subprocess) mit KI erfolgreich. 379 Tests grÃ¼n âœ…  
+> **Phase:** 7.1 â€“ PDF Admin-Report KI-Analyse Fix  
+> **Session-Ergebnis:** PDF-Report zeigt jetzt vollstÃ¤ndige KI-Metriken (Modell, Token-Verbrauch, Latenz). 379 Tests grÃ¼n âœ…  
 
 ---
 
@@ -422,3 +422,29 @@ storage-classification-pilot/
 â”œâ”€â”€ .env.example
 â””â”€â”€ requirements.txt
 ```
+
+---
+
+## 15. Aktuelle Updates (2026-06-08)
+
+### PDF Admin-Report: KI-Analyse Felder Fix
+
+**Problem:** Im PDF-Report (Abschnitt 'KI-Analyse') wurden KI-Modell, Token-Verbrauch und Latenz nicht angezeigt.
+
+**Ursache:** Frontend-Funktion `compile_pdf_on_the_fly_frontend()` befüllte nur 7 von 23 AI-Feldern beim Erstellen des RunSummary-Objekts. Die restlichen 16 Felder (`ai_model`, `ai_total_tokens_sum`, `ai_prompt_tokens_total`, etc.) erhielten Default-Werte (0 bzw. '').
+
+**Lösung:** Alle 16 fehlenden AI-Felder werden jetzt aus `run-summary.json` gelesen:
+- `ai_model` ? zeigt jetzt z.B. 'llama-3.3-70b-versatile'
+- `ai_prompt_tokens_total` ? tatsächlicher Wert
+- `ai_completion_tokens_total` ? tatsächlicher Wert
+- `ai_total_tokens_sum` ? tatsächlicher Wert
+- `ai_latency_ms_avg/max` ? tatsächliche Werte
+- `ai_estimated_tokens_raw_total/buffered_total` ? Schätzungen mit Safety Factor
+- `ai_token_source_breakdown` ? Quelle (provider_usage/estimated)
+- `needs_ai_count`, `retry_recommended_count`, `ai_skipped_budget_exhausted_count` ? Retry-Metriken
+
+**Dateien geändert:**
+- `frontend/app.py` (Zeile ~420-430)
+
+**Dokumentation:**
+- `docs/andre3000-pdf-ki-analyse-fix-20260608.md`

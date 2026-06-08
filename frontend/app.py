@@ -425,7 +425,22 @@ def compile_pdf_on_the_fly_frontend(run_id: str) -> bytes | None:
             ai_calls_used=int(summary_dict.get("ai_calls_used", 0)),
             ai_calls_skipped=int(summary_dict.get("ai_calls_skipped", 0)),
             ai_errors=int(summary_dict.get("ai_errors", 0)),
-            ai_candidates=int(summary_dict.get("ai_candidates", 0))
+            ai_candidates=int(summary_dict.get("ai_candidates", 0)),
+            ai_model=summary_dict.get("ai_model", ""),
+            ai_prompt_version=summary_dict.get("ai_prompt_version", ""),
+            ai_prompt_tokens_total=int(summary_dict.get("ai_prompt_tokens_total", 0)),
+            ai_completion_tokens_total=int(summary_dict.get("ai_completion_tokens_total", 0)),
+            ai_total_tokens_sum=int(summary_dict.get("ai_total_tokens", summary_dict.get("ai_total_tokens_sum", 0))),
+            ai_estimated_tokens_total=int(summary_dict.get("ai_estimated_tokens_total", 0)),
+            ai_estimated_tokens_raw_total=int(summary_dict.get("ai_estimated_tokens_raw_total", 0)),
+            ai_estimated_tokens_buffered_total=int(summary_dict.get("ai_estimated_tokens_buffered_total", 0)),
+            ai_token_estimation_safety_factor=float(summary_dict.get("ai_token_estimation_safety_factor", 1.4)),
+            ai_latency_ms_avg=float(summary_dict.get("ai_latency_ms_avg", 0.0)),
+            ai_latency_ms_max=int(summary_dict.get("ai_latency_ms_max", 0)),
+            ai_token_source_breakdown=summary_dict.get("ai_token_source_breakdown", ""),
+            ai_skipped_budget_exhausted_count=int(summary_dict.get("ai_skipped_budget_exhausted_count", 0)),
+            needs_ai_count=int(summary_dict.get("needs_ai_count", 0)),
+            retry_recommended_count=int(summary_dict.get("retry_recommended_count", 0)),
         )
         
         results_list = []
